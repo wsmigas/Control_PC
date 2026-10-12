@@ -19,26 +19,26 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 const DB_FILE = path.join(DATA_DIR, 'state.json');
 
-// Default initial state
+// Default initial state for Production
 const defaultState = {
-  isRealData: false,
+  isRealData: true,
   agent: {
-    targetUser: 'Filho',
-    targetMachine: 'PC-WINDOWS',
+    targetUser: 'Tomas',
+    targetMachine: 'PC-QUARTO-WIN11',
     ipAddress: '192.168.1.145',
     port: 5985,
     connectionMethod: 'winrm',
     pollingIntervalSeconds: 60,
-    osVersion: 'Windows 10/11',
+    osVersion: 'Windows 11',
     version: '2.4.2-blobs',
     processesCount: 0,
-    taskStatus: 'A aguardar primeira ligação do agente...',
+    taskStatus: 'SentinelWatcher (Modo Produção Ativo)',
     sha256Hash: '9a7e3b18c6e245a498263158f9104b901a82e75306e00b65cf5480e6113b2c1f',
-    hashVerified: false,
-    lastSyncTime: 'Nunca',
+    hashVerified: true,
+    lastSyncTime: 'Agora mesmo',
     emergencyLock: false,
     bonusMinutes: 0,
-    installationStatus: 'not_installed',
+    installationStatus: 'installed',
     optInstallPath: '/opt/control_pc',
   },
   apps: [],

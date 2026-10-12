@@ -92,15 +92,15 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               <span aria-hidden="true">·</span>
               <span className="font-mono">{agent.ipAddress}</span>
               <span aria-hidden="true">·</span>
-              <span className="text-emerald-400 flex items-center gap-1 font-medium">
+              <span className={`flex items-center gap-1 font-medium ${agent.processesCount > 0 ? 'text-emerald-400' : 'text-cyan-400'}`}>
                 <CheckCircle2 className="h-3 w-3" />
-                Agente {agent.version} (SHA-256 OK)
+                {agent.processesCount > 0 ? `Agente Ativo (${agent.processesCount} processos)` : 'Agente em Espera'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Quick Simulator & Bonus Controls */}
+        {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2 self-stretch lg:self-auto justify-end">
           <button
             onClick={() => onAddBonusMinutes(30)}
@@ -109,15 +109,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           >
             <PlusCircle className="h-3.5 w-3.5" />
             <span>+30m Bónus</span>
-          </button>
-
-          <button
-            onClick={() => onSimulateAppUsage('app-roblox', 15)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-900/80 transition-colors"
-            title="Simula a execução de 15 minutos em Roblox para testar o limite"
-          >
-            <Play className="h-3.5 w-3.5" />
-            <span>Simular +15m Roblox</span>
           </button>
         </div>
       </div>
@@ -399,18 +390,29 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
 
           <div className="space-y-3">
-            {sortedApps.slice(0, 5).map((app) => {
-              const hasLimit = app.dailyLimitMinutes !== null;
-              const isOverLimit = hasLimit && app.minutesToday >= (app.dailyLimitMinutes ?? 0);
-              const percent = hasLimit
-                ? Math.min(100, Math.round((app.minutesToday / (app.dailyLimitMinutes ?? 1)) * 100))
-                : 100;
+            {sortedApps.length === 0 ? (
+              <div className="py-10 text-center space-y-2 border border-dashed border-slate-800 rounded-lg p-6">
+                <Laptop className="h-8 w-8 text-slate-600 mx-auto" />
+                <h4 className="text-sm font-semibold text-slate-300">
+                  Modo de Produção: A aguardar atividade do PC
+                </h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                  Ainda não há aplicações registadas hoje no computador de {agent.targetUser} ({agent.ipAddress}). Assim que uma aplicação for aberta no Windows, o agente <code className="text-slate-400">vigia.ps1</code> registará o processo e os minutos em direto.
+                </p>
+              </div>
+            ) : (
+              sortedApps.slice(0, 5).map((app) => {
+                const hasLimit = app.dailyLimitMinutes !== null;
+                const isOverLimit = hasLimit && app.minutesToday >= (app.dailyLimitMinutes ?? 0);
+                const percent = hasLimit
+                  ? Math.min(100, Math.round((app.minutesToday / (app.dailyLimitMinutes ?? 1)) * 100))
+                  : 100;
 
-              return (
-                <div
-                  key={app.id}
-                  className="rounded-lg border border-slate-800/80 bg-slate-900/40 p-3.5 hover:bg-slate-900/70 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
+                return (
+                  <div
+                    key={app.id}
+                    className="rounded-lg border border-slate-800/80 bg-slate-900/40 p-3.5 hover:bg-slate-900/70 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-white text-sm">
@@ -525,10 +527,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
 
           <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
-            <div className="text-cyan-400 font-bold">INFO vigia.ps1</div>
-            <div>tarefa=SentinelWatcher (Ativa)</div>
-            <div>processos=4 em monitorização contínua</div>
-            <div className="text-emerald-400">hash=ok (SHA256 íntegro)</div>
+            <div className="text-cyan-400 font-bold">INFO vigia.ps1 ({agent.ipAddress})</div>
+            <div>tarefa={agent.taskStatus}</div>
+            <div>processos={agent.processesCount} em monitorização contínua</div>
+            <div className={agent.hashVerified ? 'text-emerald-400' : 'text-amber-400'}>
+              hash={agent.hashVerified ? 'ok (SHA256 validado)' : 'a aguardar verificação'}
+            </div>
           </div>
         </div>
       </div>

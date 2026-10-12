@@ -172,19 +172,29 @@ export const AppsManagementTab: React.FC<AppsManagementTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {filteredApps.map((app) => {
-                const hasLimit = app.dailyLimitMinutes !== null;
-                const limitMins = app.dailyLimitMinutes ?? 0;
-                const isOverLimit = hasLimit && app.minutesToday >= limitMins;
-                const percent = hasLimit
-                  ? Math.min(100, Math.round((app.minutesToday / limitMins) * 100))
-                  : 100;
+              {filteredApps.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
+                    <div className="space-y-1">
+                      <p className="font-semibold text-slate-300">Modo de Produção: Nenhuma aplicação registada</p>
+                      <p className="text-xs text-slate-400">O agente vigia.ps1 no Windows detetará e registará os processos reais assim que forem abertos.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredApps.map((app) => {
+                  const hasLimit = app.dailyLimitMinutes !== null;
+                  const limitMins = app.dailyLimitMinutes ?? 0;
+                  const isOverLimit = hasLimit && app.minutesToday >= limitMins;
+                  const percent = hasLimit
+                    ? Math.min(100, Math.round((app.minutesToday / limitMins) * 100))
+                    : 100;
 
-                return (
-                  <tr
-                    key={app.id}
-                    className="hover:bg-slate-900/40 transition-colors group"
-                  >
+                  return (
+                    <tr
+                      key={app.id}
+                      className="hover:bg-slate-900/40 transition-colors group"
+                    >
                     {/* App info */}
                     <td className="py-3.5 px-4">
                       <div className="flex flex-col">
@@ -273,15 +283,6 @@ export const AppsManagementTab: React.FC<AppsManagementTabProps> = ({
                     {/* Action buttons */}
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {/* Simulation button */}
-                        <button
-                          type="button"
-                          onClick={() => onSimulateAppUsage(app.id, 15)}
-                          title="Simular +15 min de uso nesta app"
-                          className="p-1.5 rounded border border-slate-800 bg-slate-900 text-slate-400 hover:text-cyan-300 hover:border-slate-700 transition-colors"
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                        </button>
 
                         {/* Kill process if running */}
                         {app.status === 'running' && (

@@ -30,6 +30,7 @@ interface AdminTabProps {
   onSyncOptDirectory: () => void;
   onOpenConnectModal?: () => void;
   onResetAgentData?: () => void;
+  onLoadDemoData?: () => void;
 }
 
 export const AdminTab: React.FC<AdminTabProps> = ({
@@ -39,6 +40,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   onSyncOptDirectory,
   onOpenConnectModal,
   onResetAgentData,
+  onLoadDemoData,
 }) => {
   // Form fields
   const [ip, setIp] = useState(agent.ipAddress);
@@ -151,18 +153,9 @@ export const AdminTab: React.FC<AdminTabProps> = ({
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const manualPsCommand = `# Cole no PowerShell (Executar como Administrador) no PC de ${username} (${ip}):
-$srv = "http://${window.location.hostname || '192.168.1.100'}:3000"
-$d = "$env:ProgramData\\SentinelPC"
-New-Item -ItemType Directory -Path $d -Force | Out-Null
-Write-Host "[SentinelPC] A descarregar e instalar agente no destino..." -ForegroundColor Cyan
-Invoke-RestMethod -Uri "$srv/api/agente_bootstrap.ps1" -OutFile "$d\\agente.ps1"
-Invoke-RestMethod -Uri "$srv/api/vigia_bootstrap.ps1" -OutFile "$d\\vigia.ps1"
-Invoke-RestMethod -Uri "$srv/api/regras.json" -OutFile "$d\\regras.json"
-# Registo da tarefa agendada Windows
-schtasks /create /tn "SentinelWatcher" /tr "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '$d\\vigia.ps1'" /sc onlogon /f
-schtasks /run /tn "SentinelWatcher"
-Write-Host "[SentinelPC] Agente instalado com sucesso e em monitorizacao ativa!" -ForegroundColor Green`;
+  const serverHost = typeof window !== 'undefined' && window.location.host ? window.location.host : `${window.location.hostname || '192.168.1.100'}:3000`;
+  const manualPsCommand = `# Comando de Linha Única para PowerShell (Executar como Administrador no PC do Filho):
+irm http://${serverHost}/api/agent/install.ps1 | iex`;
 
   const systemdService = `[Unit]
 Description=SentinelPC - Servidor de Controlo Parental

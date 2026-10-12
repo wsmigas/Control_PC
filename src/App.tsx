@@ -35,21 +35,31 @@ import { ShieldAlert, CheckCircle, Info } from 'lucide-react';
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('overview');
 
-  // Core application state
+  // Core application state in Production (clean real data)
   const [apps, setApps] = useState<AppUsageRecord[]>(() => {
-    const saved = localStorage.getItem('sentinel_apps');
-    if (saved) {
-      try { return JSON.parse(saved); } catch { /* ignore */ }
+    const isProdActive = localStorage.getItem('sentinel_production_mode');
+    if (isProdActive === 'true') {
+      const saved = localStorage.getItem('sentinel_apps');
+      if (saved) {
+        try { return JSON.parse(saved); } catch { /* ignore */ }
+      }
+      return [];
     }
-    return INITIAL_APPS;
+    // Activate production mode: clear legacy mock data
+    localStorage.setItem('sentinel_production_mode', 'true');
+    localStorage.removeItem('sentinel_apps');
+    return [];
   });
 
   const [hourlyActivity, setHourlyActivity] = useState<HourlyActivity[]>(() => {
-    const saved = localStorage.getItem('sentinel_hourly');
-    if (saved) {
-      try { return JSON.parse(saved); } catch { /* ignore */ }
-    }
-    return INITIAL_HOURLY_ACTIVITY;
+    return Array.from({ length: 15 }, (_, i) => ({
+      hour: i + 8,
+      games: 0,
+      social: 0,
+      study: 0,
+      browsing: 0,
+      other: 0,
+    }));
   });
 
   const [curfewSchedule, setCurfewSchedule] = useState<CurfewDaySchedule[]>(() => {
@@ -74,7 +84,7 @@ export default function App() {
   // Modal state
   const [editingApp, setEditingApp] = useState<AppUsageRecord | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'alert' } | null>(null);
-  const [isRealMode, setIsRealMode] = useState<boolean>(false);
+  const [isRealMode, setIsRealMode] = useState<boolean>(true);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState<boolean>(false);
 
   // Poll real status from /api/status if backend is running
@@ -85,12 +95,12 @@ export default function App() {
         const res = await fetch('/api/status');
         if (res.ok) {
           const data = await res.json();
-          if (isMounted && data.isRealData) {
-            setIsRealMode(true);
-            if (data.apps && data.apps.length > 0) setApps(data.apps);
+          if (isMounted) {
+            setIsRealMode(data.isRealData ?? true);
+            if (data.apps !== undefined) setApps(data.apps);
             if (data.hourlyActivity) setHourlyActivity(data.hourlyActivity);
             if (data.agent) setAgent((prev) => ({ ...prev, ...data.agent }));
-            if (data.logs && data.logs.length > 0) setLogs(data.logs);
+            if (data.logs) setLogs(data.logs);
           }
         }
       } catch {
@@ -99,7 +109,7 @@ export default function App() {
     };
 
     fetchRealStatus();
-    const interval = setInterval(fetchRealStatus, 4000);
+    const interval = setInterval(fetchRealStatus, 3000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -458,14 +468,39 @@ export default function App() {
 
   const handleResetAgentData = async () => {
     try {
-      await fetch('/api/reset', { method: 'POST' });
+      const res = await fetch('/api/reset', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.state) {
+          if (data.state.apps) setApps(data.state.apps);
+          if (data.state.hourlyActivity) setHourlyActivity(data.state.hourlyActivity);
+          if (data.state.agent) setAgent((prev) => ({ ...prev, ...data.state.agent }));
+          if (data.state.logs) setLogs(data.state.logs);
+        }
+      }
     } catch {
       // offline fallback
     }
     setApps([]);
+    setHourlyActivity(Array.from({ length: 15 }, (_, i) => ({
+      hour: i + 8,
+      games: 0,
+      social: 0,
+      study: 0,
+      browsing: 0,
+      other: 0,
+    })));
+    setAgent((prev) => ({
+      ...prev,
+      processesCount: 0,
+      taskStatus: 'À espera de relatórios do agente...',
+      lastSyncTime: 'A aguardar primeira conexão',
+      hashVerified: false,
+    }));
     setIsRealMode(false);
     localStorage.removeItem('sentinel_apps');
-    showToast('Dados e contadores do agente limpos com sucesso!', 'success');
+    localStorage.removeItem('sentinel_hourly');
+    showToast('Dados e contadores limpos! Painel reposto a zeros.', 'success');
   };
 
   const handleSyncOptDirectory = () => {
@@ -500,30 +535,18 @@ export default function App() {
         </div>
       )}
 
-      {/* Real vs Demo Data Mode Status Indicator */}
-      <div
-        className={`border-b px-4 py-2 text-xs flex items-center justify-between gap-4 ${
-          isRealMode
-            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
-            : 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
-        }`}
-      >
+      {/* Production Mode Status Indicator */}
+      <div className="border-b px-4 py-2 text-xs flex items-center justify-between gap-4 bg-emerald-950/40 border-emerald-500/30 text-emerald-300">
         <div className="flex items-center gap-2 max-w-4xl">
-          {isRealMode ? (
-            <>
-              <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
-              <span>
-                <strong>Modo em Tempo Real Ativo:</strong> A receber telemetria direta do computador de {agent.targetUser} ({agent.targetMachine} @ {agent.ipAddress}).
-              </span>
-            </>
-          ) : (
-            <>
-              <Info className="h-4 w-4 text-cyan-400 shrink-0" />
-              <span>
-                <strong>Dados de Demonstração / Aguardar Agente:</strong> O agente no PC do filho ainda não enviou telemetria em direto. No separador <strong>Administração</strong>, execute o comando de instalação para receber os dados reais.
-              </span>
-            </>
-          )}
+          <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+          <span>
+            <strong>MODO DE PRODUÇÃO ATIVO:</strong> SentinelPC em escuta para {agent.targetUser} ({agent.targetMachine} @ {agent.ipAddress}).
+            {apps.length > 0 ? (
+              <span className="text-white ml-1">· {apps.length} aplicação(ões) registada(s) em tempo real.</span>
+            ) : (
+              <span className="text-emerald-300/80 ml-1">· A aguardar processos em execução no Windows.</span>
+            )}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -531,17 +554,15 @@ export default function App() {
             onClick={() => setIsConnectModalOpen(true)}
             className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors"
           >
-            {isRealMode ? 'Diagnóstico / Limpar' : 'Ligar Agente Real'}
+            Diagnóstico / Testar
           </button>
-          {isRealMode && (
-            <button
-              onClick={handleResetAgentData}
-              className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors"
-              title="Limpar todos os dados e contadores"
-            >
-              Limpar Dados
-            </button>
-          )}
+          <button
+            onClick={handleResetAgentData}
+            className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors"
+            title="Limpar todos os dados e contadores"
+          >
+            Limpar Dados (0m)
+          </button>
         </div>
       </div>
 
