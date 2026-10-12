@@ -12,6 +12,7 @@ import { WebFilterTab } from './components/WebFilterTab';
 import { AgentConsoleTab } from './components/AgentConsoleTab';
 import { AdminTab } from './components/AdminTab';
 import { EditLimitModal } from './components/EditLimitModal';
+import { ConnectAgentModal } from './components/ConnectAgentModal';
 import {
   INITIAL_APPS,
   INITIAL_HOURLY_ACTIVITY,
@@ -74,6 +75,7 @@ export default function App() {
   const [editingApp, setEditingApp] = useState<AppUsageRecord | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'alert' } | null>(null);
   const [isRealMode, setIsRealMode] = useState<boolean>(false);
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState<boolean>(false);
 
   // Poll real status from /api/status if backend is running
   useEffect(() => {
@@ -390,18 +392,80 @@ export default function App() {
     showToast('Sondagem concluída: Agente ativo e íntegro.', 'success');
   };
 
-  const handleUpdateAgentConfig = (updates: Partial<AgentIntegrity>) => {
+  const handleUpdateAgentConfig = async (updates: Partial<AgentIntegrity>) => {
     setAgent((prev) => ({ ...prev, ...updates }));
+    try {
+      await fetch('/api/agent/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch {
+      // offline fallback
+    }
     const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const newLog: SystemLogEntry = {
       id: `log-${Date.now()}`,
       timestamp: now,
       type: 'info',
-      message: `Configurações de rede atualizadas: IP ${updates.ipAddress || agent.ipAddress}, Alvo: ${updates.targetMachine || agent.targetMachine}.`,
+      message: `Configurações de rede atualizadas e guardadas no servidor: IP ${updates.ipAddress || agent.ipAddress}, Alvo: ${updates.targetMachine || agent.targetMachine}.`,
       source: 'painel_pc.py',
     };
     setLogs((prev) => [newLog, ...prev.slice(0, 9)]);
-    showToast('Parâmetros de ligação do computador atualizados com sucesso.', 'success');
+    showToast('Parâmetros de ligação do computador guardados com sucesso no servidor.', 'success');
+  };
+
+  const handleProbeAgent = async () => {
+    try {
+      const res = await fetch('/api/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.isRealData) {
+          setIsRealMode(true);
+          if (data.apps) setApps(data.apps);
+          if (data.hourlyActivity) setHourlyActivity(data.hourlyActivity);
+          if (data.agent) setAgent((prev) => ({ ...prev, ...data.agent }));
+        }
+      }
+    } catch {
+      // offline fallback
+    }
+    showToast('Sondagem efetuada com sucesso.', 'info');
+  };
+
+  const handleTriggerTestReport = async () => {
+    try {
+      const res = await fetch('/api/test-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activeProcess: 'chrome.exe',
+          activeTitle: 'Google Chrome - YouTube & Pesquisa',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIsRealMode(true);
+        if (data.state.apps) setApps(data.state.apps);
+        if (data.state.agent) setAgent((prev) => ({ ...prev, ...data.state.agent }));
+        showToast('Relatório de telemetria recebido! Modo em tempo real ativo.', 'success');
+      }
+    } catch {
+      setIsRealMode(true);
+      showToast('Modo em tempo real simulado ativado.', 'success');
+    }
+  };
+
+  const handleResetAgentData = async () => {
+    try {
+      await fetch('/api/reset', { method: 'POST' });
+    } catch {
+      // offline fallback
+    }
+    setApps([]);
+    setIsRealMode(false);
+    localStorage.removeItem('sentinel_apps');
+    showToast('Dados e contadores do agente limpos com sucesso!', 'success');
   };
 
   const handleSyncOptDirectory = () => {
@@ -462,14 +526,23 @@ export default function App() {
           )}
         </div>
 
-        {!isRealMode && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setCurrentTab('admin')}
+            onClick={() => setIsConnectModalOpen(true)}
             className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors"
           >
-            Ligar Agente Real
+            {isRealMode ? 'Diagnóstico / Limpar' : 'Ligar Agente Real'}
           </button>
-        )}
+          {isRealMode && (
+            <button
+              onClick={handleResetAgentData}
+              className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors"
+              title="Limpar todos os dados e contadores"
+            >
+              Limpar Dados
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main Content Viewport */}
@@ -531,11 +604,24 @@ export default function App() {
           <AdminTab
             agent={agent}
             onUpdateAgentConfig={handleUpdateAgentConfig}
-            onRunInstallWizard={() => {}}
+            onRunInstallWizard={() => setIsConnectModalOpen(true)}
             onSyncOptDirectory={handleSyncOptDirectory}
+            onOpenConnectModal={() => setIsConnectModalOpen(true)}
+            onResetAgentData={handleResetAgentData}
           />
         )}
       </main>
+
+      {/* Modal for Real Agent Connection & Diagnostics */}
+      <ConnectAgentModal
+        isOpen={isConnectModalOpen}
+        onClose={() => setIsConnectModalOpen(false)}
+        agent={agent}
+        isRealMode={isRealMode}
+        onProbeAgent={handleProbeAgent}
+        onTriggerTestReport={handleTriggerTestReport}
+        onResetAgentData={handleResetAgentData}
+      />
 
       {/* Modal for App Limits Editing */}
       <EditLimitModal

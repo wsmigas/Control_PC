@@ -28,6 +28,8 @@ interface AdminTabProps {
   onUpdateAgentConfig: (updates: Partial<AgentIntegrity>) => void;
   onRunInstallWizard: () => void;
   onSyncOptDirectory: () => void;
+  onOpenConnectModal?: () => void;
+  onResetAgentData?: () => void;
 }
 
 export const AdminTab: React.FC<AdminTabProps> = ({
@@ -35,6 +37,8 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   onUpdateAgentConfig,
   onRunInstallWizard,
   onSyncOptDirectory,
+  onOpenConnectModal,
+  onResetAgentData,
 }) => {
   // Form fields
   const [ip, setIp] = useState(agent.ipAddress);
@@ -192,17 +196,42 @@ WantedBy=multi-user.target`;
           </p>
         </div>
 
-        {/* Quick Install Action Button */}
-        <button
-          onClick={() => {
-            setIsInstallModalOpen(true);
-            setInstallStep(0);
-          }}
-          className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-lg shadow-cyan-950 whitespace-nowrap"
-        >
-          <DownloadCloud className="h-4 w-4" />
-          <span>Instalar Agente no PC Alvo</span>
-        </button>
+        {/* Header Action Buttons */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onOpenConnectModal && (
+            <button
+              type="button"
+              onClick={onOpenConnectModal}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 transition-colors whitespace-nowrap"
+            >
+              <Activity className="h-4 w-4 text-cyan-400" />
+              <span>Diagnóstico / Ligar em Direto</span>
+            </button>
+          )}
+
+          {onResetAgentData && (
+            <button
+              type="button"
+              onClick={onResetAgentData}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 transition-colors whitespace-nowrap"
+              title="Limpa contadores e repõe o agente a zeros"
+            >
+              <Trash2 className="h-4 w-4 text-rose-400" />
+              <span>Limpar Dados do Agente</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              setIsInstallModalOpen(true);
+              setInstallStep(0);
+            }}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-lg shadow-cyan-950 whitespace-nowrap"
+          >
+            <DownloadCloud className="h-4 w-4" />
+            <span>Instalar Agente no PC Alvo</span>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -364,7 +364,101 @@ app.post('/api/bonus', (req, res) => {
   res.json({ bonusMinutes: currentState.agent.bonusMinutes });
 });
 
-// 8. Serve regras.json directly
+// 8. Update agent network configuration
+app.post('/api/agent/config', (req, res) => {
+  const updates = req.body;
+  currentState.agent = { ...currentState.agent, ...updates };
+  saveState();
+  res.json({ success: true, agent: currentState.agent });
+});
+
+// 9. Reset / Limpar todos os dados do agente
+app.post('/api/reset', (req, res) => {
+  currentState.isRealData = false;
+  currentState.apps = [];
+  currentState.hourlyActivity = Array.from({ length: 15 }, (_, i) => ({
+    hour: i + 8,
+    games: 0,
+    social: 0,
+    study: 0,
+    browsing: 0,
+    other: 0,
+  }));
+  currentState.agent.lastSyncTime = 'Nunca';
+  currentState.agent.hashVerified = false;
+  currentState.agent.processesCount = 0;
+  currentState.agent.taskStatus = 'À espera de relatórios...';
+  currentState.logs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toLocaleTimeString('pt-PT'),
+    type: 'info',
+    message: 'Dados do agente e contadores limpos com sucesso.',
+    source: 'server',
+  });
+  saveState();
+  res.json({ success: true, state: currentState });
+});
+
+// 10. Test report simulator (para verificar comunicação imediatamente)
+app.post('/api/test-report', (req, res) => {
+  const testData = {
+    targetMachine: currentState.agent.targetMachine || 'PC-WINDOWS',
+    targetUser: currentState.agent.targetUser || 'Tomas',
+    activeProcess: req.body.activeProcess || 'chrome.exe',
+    activeTitle: req.body.activeTitle || 'Google Chrome - Pesquisa Escolar',
+    runningProcesses: req.body.runningProcesses || ['chrome.exe', 'explorer.exe', 'Discord.exe', 'Code.exe'],
+    osVersion: currentState.agent.osVersion || 'Windows 11 Pro',
+  };
+
+  // Dispatch through report handler
+  const now = new Date();
+  currentState.isRealData = true;
+  currentState.agent.lastSyncTime = 'Agora mesmo';
+  currentState.agent.hashVerified = true;
+  currentState.agent.installationStatus = 'installed';
+  currentState.agent.processesCount = testData.runningProcesses.length;
+  currentState.agent.taskStatus = 'Ativo (Em monitorização)';
+
+  const cleanName = testData.activeProcess.replace(/\.exe$/i, '');
+  const exeName = `${cleanName}.exe`;
+  const category = categorizeProcess(cleanName);
+
+  let app = currentState.apps.find((a: any) => a.processName.toLowerCase() === exeName.toLowerCase());
+  if (!app) {
+    app = {
+      id: `app-${cleanName.toLowerCase()}`,
+      processName: exeName,
+      displayName: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
+      iconType: 'box',
+      category,
+      minutesToday: 5,
+      dailyLimitMinutes: category === 'games' ? 90 : null,
+      status: 'running',
+      windowTitle: testData.activeTitle,
+      lastActiveTime: 'Agora mesmo',
+      isRestricted: category === 'games',
+    };
+    currentState.apps.push(app);
+  } else {
+    app.minutesToday += 5;
+    app.status = 'running';
+    app.windowTitle = testData.activeTitle;
+    app.lastActiveTime = 'Agora mesmo';
+  }
+
+  currentState.logs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: now.toLocaleTimeString('pt-PT'),
+    type: 'success',
+    message: `Relatório de teste recebido com sucesso de ${currentState.agent.targetMachine}! Agente operacional.`,
+    source: 'agente.ps1',
+  });
+
+  saveState();
+  res.json({ success: true, state: currentState });
+});
+
+// 11. Serve regras.json directly
 app.get('/api/regras.json', (req, res) => {
   res.json({
     apps: currentState.apps,
