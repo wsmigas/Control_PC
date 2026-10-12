@@ -1,0 +1,15 @@
+[Unit]
+Description=SentinelPC - Servidor de Controlo Parental
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/control_pc
+ExecStart=/usr/bin/npm run preview -- --port 3000 --host 0.0.0.0
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

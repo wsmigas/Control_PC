@@ -73,15 +73,49 @@ export default function App() {
   // Modal state
   const [editingApp, setEditingApp] = useState<AppUsageRecord | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'alert' } | null>(null);
+  const [isRealMode, setIsRealMode] = useState<boolean>(false);
+
+  // Poll real status from /api/status if backend is running
+  useEffect(() => {
+    let isMounted = true;
+    const fetchRealStatus = async () => {
+      try {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.isRealData) {
+            setIsRealMode(true);
+            if (data.apps && data.apps.length > 0) setApps(data.apps);
+            if (data.hourlyActivity) setHourlyActivity(data.hourlyActivity);
+            if (data.agent) setAgent((prev) => ({ ...prev, ...data.agent }));
+            if (data.logs && data.logs.length > 0) setLogs(data.logs);
+          }
+        }
+      } catch {
+        // Running client-only preview or waiting for first backend ping
+      }
+    };
+
+    fetchRealStatus();
+    const interval = setInterval(fetchRealStatus, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Auto-save to localStorage
   useEffect(() => {
-    localStorage.setItem('sentinel_apps', JSON.stringify(apps));
-  }, [apps]);
+    if (!isRealMode) {
+      localStorage.setItem('sentinel_apps', JSON.stringify(apps));
+    }
+  }, [apps, isRealMode]);
 
   useEffect(() => {
-    localStorage.setItem('sentinel_hourly', JSON.stringify(hourlyActivity));
-  }, [hourlyActivity]);
+    if (!isRealMode) {
+      localStorage.setItem('sentinel_hourly', JSON.stringify(hourlyActivity));
+    }
+  }, [hourlyActivity, isRealMode]);
 
   useEffect(() => {
     localStorage.setItem('sentinel_curfew', JSON.stringify(curfewSchedule));
@@ -401,6 +435,42 @@ export default function App() {
           <span>PAUSA FAMILIAR ATIVA: O computador de {agent.targetUser} está temporariamente com ecrã e lazer bloqueados.</span>
         </div>
       )}
+
+      {/* Real vs Demo Data Mode Status Indicator */}
+      <div
+        className={`border-b px-4 py-2 text-xs flex items-center justify-between gap-4 ${
+          isRealMode
+            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+            : 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
+        }`}
+      >
+        <div className="flex items-center gap-2 max-w-4xl">
+          {isRealMode ? (
+            <>
+              <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+              <span>
+                <strong>Modo em Tempo Real Ativo:</strong> A receber telemetria direta do computador de {agent.targetUser} ({agent.targetMachine} @ {agent.ipAddress}).
+              </span>
+            </>
+          ) : (
+            <>
+              <Info className="h-4 w-4 text-cyan-400 shrink-0" />
+              <span>
+                <strong>Dados de Demonstração / Aguardar Agente:</strong> O agente no PC do filho ainda não enviou telemetria em direto. No separador <strong>Administração</strong>, execute o comando de instalação para receber os dados reais.
+              </span>
+            </>
+          )}
+        </div>
+
+        {!isRealMode && (
+          <button
+            onClick={() => setCurrentTab('admin')}
+            className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors"
+          >
+            Ligar Agente Real
+          </button>
+        )}
+      </div>
 
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
