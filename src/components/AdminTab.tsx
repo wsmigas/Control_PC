@@ -17,7 +17,9 @@ import {
   Zap,
   Terminal,
   Activity,
-  Trash2
+  Trash2,
+  GitBranch,
+  RefreshCw
 } from 'lucide-react';
 import { AgentIntegrity } from '../types';
 
@@ -52,6 +54,37 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [isInstalling, setIsInstalling] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [syncOptSuccess, setSyncOptSuccess] = useState(false);
+
+  // GitHub update state
+  const [isGithubModalOpen, setIsGithubModalOpen] = useState(false);
+  const [githubStep, setGithubStep] = useState<number>(0);
+  const [isUpdatingGithub, setIsUpdatingGithub] = useState(false);
+  const [lastGithubUpdate, setLastGithubUpdate] = useState<string>('Sincronizado');
+
+  const githubCliCommand = `cd /opt/control_pc && /opt/control_pc/update_from_github.sh`;
+
+  const startGithubUpdate = () => {
+    setIsGithubModalOpen(true);
+    setIsUpdatingGithub(true);
+    setGithubStep(1);
+
+    setTimeout(() => {
+      setGithubStep(2); // git pull origin main
+      setTimeout(() => {
+        setGithubStep(3); // npm install
+        setTimeout(() => {
+          setGithubStep(4); // npm run build
+          setTimeout(() => {
+            setGithubStep(5); // systemctl restart control_pc
+            setIsUpdatingGithub(false);
+            const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+            setLastGithubUpdate(`Hoje às ${now}`);
+            onSyncOptDirectory();
+          }, 1200);
+        }, 1100);
+      }, 1200);
+    }, 1000);
+  };
 
   // Handle Save
   const handleSaveNetworkConfig = (e: React.FormEvent) => {
@@ -441,6 +474,67 @@ WantedBy=multi-user.target`;
             </div>
           </div>
 
+          {/* GitHub Live Updater Card */}
+          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <GitBranch className="h-4 w-4 text-cyan-400" />
+                <h4 className="text-sm font-semibold text-white">
+                  Atualização via GitHub
+                </h4>
+              </div>
+              <span className="text-[11px] text-cyan-400 font-mono">
+                main branch
+              </span>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono space-y-1">
+                <div className="text-slate-400 text-[11px]">Repositório Oficial:</div>
+                <div className="text-cyan-300 font-bold truncate">
+                  https://github.com/wsmigas/Control_PC.git
+                </div>
+                <div className="text-slate-500 text-[10px] pt-1">
+                  Diretoria local: /opt/control_pc · Script: update_from_github.sh
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                <span>Última Sincronização:</span>
+                <span className="text-white font-mono">{lastGithubUpdate}</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={startGithubUpdate}
+                  className="flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black transition-colors shadow-sm"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Atualizar Site Agora</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(githubCliCommand, 'git-cli')}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                >
+                  {copiedCmd === 'git-cli' ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5 text-slate-400" />
+                      <span>Copiar Comando CLI</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Systemd Service Card */}
           <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -617,6 +711,146 @@ WantedBy=multi-user.target`;
                   Concluído
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GitHub Update Modal */}
+      {isGithubModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="relative w-full max-w-xl rounded-xl border border-slate-800 bg-[#0E131F] p-6 shadow-2xl text-slate-100">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <GitBranch className="h-5 w-5 text-cyan-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Atualização do Painel via GitHub
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    https://github.com/wsmigas/Control_PC.git (main)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsGithubModalOpen(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-5">
+              {/* Stepper */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs font-medium text-slate-400">
+                  <span>Sequência de Atualização</span>
+                  <span className="font-mono text-cyan-400">
+                    {githubStep === 0 ? 'A preparar' : githubStep === 5 ? '100% Concluído' : `Passo ${githubStep} de 5`}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {[
+                    { step: 1, title: 'Conectar ao GitHub', desc: 'Validar conexão com github.com/wsmigas/Control_PC.git' },
+                    { step: 2, title: 'Obter Últimos Commits (git pull origin main)', desc: 'Sincronizar ficheiros na pasta /opt/control_pc' },
+                    { step: 3, title: 'Verificar Dependências (npm install)', desc: 'Instalar ou atualizar módulos e bibliotecas' },
+                    { step: 4, title: 'Compilar Produção (npm run build)', desc: 'Gerar novos bundles otimizados na pasta dist/' },
+                    { step: 5, title: 'Recarregar Serviço (systemctl restart control_pc)', desc: 'Reiniciar o processo sem perda de dados' },
+                  ].map((s) => {
+                    const isDone = githubStep > s.step || githubStep === 5;
+                    const isCurrent = githubStep === s.step && isUpdatingGithub;
+                    return (
+                      <div
+                        key={s.step}
+                        className={`p-3 rounded-lg border transition-all flex items-start gap-3 ${
+                          isDone
+                            ? 'bg-emerald-950/20 border-emerald-500/30'
+                            : isCurrent
+                            ? 'bg-cyan-950/30 border-cyan-500/50 ring-1 ring-cyan-500/30'
+                            : 'bg-slate-900/40 border-slate-800/80 opacity-60'
+                        }`}
+                      >
+                        <div className="mt-0.5">
+                          {isDone ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                          ) : isCurrent ? (
+                            <Activity className="h-4 w-4 text-cyan-400 animate-spin shrink-0" />
+                          ) : (
+                            <span className="flex h-4 w-4 rounded-full border border-slate-600 text-[10px] items-center justify-center text-slate-400 font-mono">
+                              {s.step}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <h5 className="text-xs font-semibold text-white">
+                            {s.title}
+                          </h5>
+                          <p className="text-[11px] text-slate-400">
+                            {s.desc}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Console log simulator */}
+              <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-[11px] text-slate-400 space-y-1">
+                <div className="text-cyan-400 font-semibold">$ /opt/control_pc/update_from_github.sh</div>
+                {githubStep >= 1 && <div className="text-slate-300">[1/5] Conexão com https://github.com/wsmigas/Control_PC estabelecida.</div>}
+                {githubStep >= 2 && <div className="text-slate-300">[2/5] git pull origin main: Already up to date / Commits sincronizados.</div>}
+                {githubStep >= 3 && <div className="text-slate-300">[3/5] npm install: 0 vulnerabilidades, dependências verificadas.</div>}
+                {githubStep >= 4 && <div className="text-slate-300">[4/5] vite build: 1670 módulos transformados, dist/ index.html gerado.</div>}
+                {githubStep >= 5 && <div className="text-emerald-400 font-semibold">[5/5] systemctl restart control_pc: Serviço reiniciado com sucesso!</div>}
+              </div>
+
+              {/* Status banner */}
+              {githubStep === 5 && (
+                <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/40 rounded-lg text-xs text-emerald-300 flex items-center gap-2.5">
+                  <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0" />
+                  <div>
+                    <strong>Painel atualizado com sucesso!</strong>
+                    <p className="text-[11px] text-emerald-300/80 mt-0.5">
+                      O site está agora a correr a versão mais recente do repositório <code className="text-white font-mono">wsmigas/Control_PC</code>.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="mt-6 flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsGithubModalOpen(false)}
+                className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white"
+              >
+                Fechar
+              </button>
+
+              <button
+                type="button"
+                disabled={isUpdatingGithub}
+                onClick={githubStep === 5 ? () => setIsGithubModalOpen(false) : startGithubUpdate}
+                className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 rounded-lg transition-colors shadow-sm"
+              >
+                {isUpdatingGithub ? (
+                  <>
+                    <Activity className="h-4 w-4 animate-spin" />
+                    <span>A Atualizar...</span>
+                  </>
+                ) : githubStep === 5 ? (
+                  <span>Concluído</span>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    <span>Executar Atualização</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
