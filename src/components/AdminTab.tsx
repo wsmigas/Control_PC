@@ -61,7 +61,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [isUpdatingGithub, setIsUpdatingGithub] = useState(false);
   const [lastGithubUpdate, setLastGithubUpdate] = useState<string>('Sincronizado');
 
-  const githubCliCommand = `cd /opt/control_pc && /opt/control_pc/update_from_github.sh`;
+  const githubCliCommand = `cd /opt/control_pc && git pull origin main && npm install --legacy-peer-deps && npm run build && systemctl restart control_pc`;
 
   const startGithubUpdate = () => {
     setIsGithubModalOpen(true);
@@ -755,7 +755,7 @@ WantedBy=multi-user.target`;
                   {[
                     { step: 1, title: 'Conectar ao GitHub', desc: 'Validar conexão com github.com/wsmigas/Control_PC.git' },
                     { step: 2, title: 'Obter Últimos Commits (git pull origin main)', desc: 'Sincronizar ficheiros na pasta /opt/control_pc' },
-                    { step: 3, title: 'Verificar Dependências (npm install)', desc: 'Instalar ou atualizar módulos e bibliotecas' },
+                    { step: 3, title: 'Instalar Dependências (npm install --legacy-peer-deps)', desc: 'Forçar --legacy-peer-deps para evitar conflitos de dependências' },
                     { step: 4, title: 'Compilar Produção (npm run build)', desc: 'Gerar novos bundles otimizados na pasta dist/' },
                     { step: 5, title: 'Recarregar Serviço (systemctl restart control_pc)', desc: 'Reiniciar o processo sem perda de dados' },
                   ].map((s) => {
@@ -801,9 +801,9 @@ WantedBy=multi-user.target`;
               <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-[11px] text-slate-400 space-y-1">
                 <div className="text-cyan-400 font-semibold">$ /opt/control_pc/update_from_github.sh</div>
                 {githubStep >= 1 && <div className="text-slate-300">[1/5] Conexão com https://github.com/wsmigas/Control_PC estabelecida.</div>}
-                {githubStep >= 2 && <div className="text-slate-300">[2/5] git pull origin main: Already up to date / Commits sincronizados.</div>}
-                {githubStep >= 3 && <div className="text-slate-300">[3/5] npm install: 0 vulnerabilidades, dependências verificadas.</div>}
-                {githubStep >= 4 && <div className="text-slate-300">[4/5] vite build: 1670 módulos transformados, dist/ index.html gerado.</div>}
+                {githubStep >= 2 && <div className="text-slate-300">[2/5] git pull origin main: Commits sincronizados com sucesso.</div>}
+                {githubStep >= 3 && <div className="text-slate-300">[3/5] npm install --legacy-peer-deps: Dependências resolvidas sem erros de peer-deps.</div>}
+                {githubStep >= 4 && <div className="text-slate-300">[4/5] npm run build: 1670 módulos transformados, dist/ gerado em 610ms.</div>}
                 {githubStep >= 5 && <div className="text-emerald-400 font-semibold">[5/5] systemctl restart control_pc: Serviço reiniciado com sucesso!</div>}
               </div>
 
