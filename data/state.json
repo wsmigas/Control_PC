@@ -1,0 +1,273 @@
+{
+  "isRealData": true,
+  "agent": {
+    "targetUser": "Filho",
+    "targetMachine": "PC-TESTE",
+    "ipAddress": "192.168.1.145",
+    "port": 5985,
+    "connectionMethod": "winrm",
+    "pollingIntervalSeconds": 60,
+    "osVersion": "Windows 11",
+    "version": "2.4.2-blobs",
+    "processesCount": 0,
+    "taskStatus": "À espera de relatórios...",
+    "sha256Hash": "9a7e3b18c6e245a498263158f9104b901a82e75306e00b65cf5480e6113b2c1f",
+    "hashVerified": false,
+    "lastSyncTime": "Nunca",
+    "emergencyLock": false,
+    "bonusMinutes": 0,
+    "installationStatus": "installed",
+    "optInstallPath": "/opt/control_pc"
+  },
+  "apps": [],
+  "hourlyActivity": [
+    {
+      "hour": 8,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 9,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 10,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 11,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 12,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 13,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 14,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 15,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 16,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 17,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 18,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 19,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 20,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 21,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    },
+    {
+      "hour": 22,
+      "games": 0,
+      "social": 0,
+      "study": 0,
+      "browsing": 0,
+      "other": 0
+    }
+  ],
+  "curfewSchedule": [
+    {
+      "dayId": "mon",
+      "dayName": "Segunda-feira",
+      "shortName": "Seg",
+      "isSchoolDay": true,
+      "enabled": true,
+      "startHour": "08:00",
+      "endHour": "21:30",
+      "maxMinutes": 210
+    },
+    {
+      "dayId": "tue",
+      "dayName": "Terça-feira",
+      "shortName": "Ter",
+      "isSchoolDay": true,
+      "enabled": true,
+      "startHour": "08:00",
+      "endHour": "21:30",
+      "maxMinutes": 210
+    },
+    {
+      "dayId": "wed",
+      "dayName": "Quarta-feira",
+      "shortName": "Qua",
+      "isSchoolDay": true,
+      "enabled": true,
+      "startHour": "08:00",
+      "endHour": "21:30",
+      "maxMinutes": 210
+    },
+    {
+      "dayId": "thu",
+      "dayName": "Quinta-feira",
+      "shortName": "Qui",
+      "isSchoolDay": true,
+      "enabled": true,
+      "startHour": "08:00",
+      "endHour": "21:30",
+      "maxMinutes": 210
+    },
+    {
+      "dayId": "fri",
+      "dayName": "Sexta-feira",
+      "shortName": "Sex",
+      "isSchoolDay": true,
+      "enabled": true,
+      "startHour": "08:00",
+      "endHour": "23:00",
+      "maxMinutes": 300
+    },
+    {
+      "dayId": "sat",
+      "dayName": "Sábado",
+      "shortName": "Sáb",
+      "isSchoolDay": false,
+      "enabled": true,
+      "startHour": "09:00",
+      "endHour": "23:30",
+      "maxMinutes": 360
+    },
+    {
+      "dayId": "sun",
+      "dayName": "Domingo",
+      "shortName": "Dom",
+      "isSchoolDay": false,
+      "enabled": true,
+      "startHour": "09:00",
+      "endHour": "21:30",
+      "maxMinutes": 240
+    }
+  ],
+  "blockedDomains": [
+    {
+      "id": "dom-1",
+      "domain": "tiktok.com",
+      "category": "Redes Sociais",
+      "active": true,
+      "hitsToday": 0,
+      "addedDate": "2026-10-13"
+    },
+    {
+      "id": "dom-2",
+      "domain": "instagram.com",
+      "category": "Redes Sociais",
+      "active": true,
+      "hitsToday": 0,
+      "addedDate": "2026-10-13"
+    },
+    {
+      "id": "dom-3",
+      "domain": "betclic.pt",
+      "category": "Apostas",
+      "active": true,
+      "hitsToday": 0,
+      "addedDate": "2026-10-13"
+    }
+  ],
+  "logs": [
+    {
+      "id": "log-1791882061720",
+      "timestamp": "09:01:01",
+      "type": "info",
+      "message": "Dados do agente e contadores limpos com sucesso.",
+      "source": "server"
+    },
+    {
+      "id": "log-1791882044159",
+      "timestamp": "09:00:44",
+      "type": "info",
+      "message": "Dados do agente e contadores limpos com sucesso.",
+      "source": "server"
+    },
+    {
+      "id": "log-1791881925835",
+      "timestamp": "08:58:45",
+      "type": "info",
+      "message": "Dados do agente e contadores limpos com sucesso.",
+      "source": "server"
+    },
+    {
+      "id": "log-init",
+      "timestamp": "08:57:16",
+      "type": "info",
+      "message": "Servidor SentinelPC inicializado. A aguardar conexão do agente Windows.",
+      "source": "server"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Laptop,
   Network,
@@ -66,31 +66,136 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [githubStep, setGithubStep] = useState<number>(0);
   const [isUpdatingGithub, setIsUpdatingGithub] = useState(false);
   const [lastGithubUpdate, setLastGithubUpdate] = useState<string>('Sincronizado');
+  const [githubLogs, setGithubLogs] = useState<string[]>([]);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubStatus, setGithubStatus] = useState<{
+    localCommit?: string;
+    remoteCommit?: string;
+    isUpToDate?: boolean;
+    lastUpdated?: string | null;
+  }>({});
+  const [autoReloadCountdown, setAutoReloadCountdown] = useState<number | null>(null);
+  const terminalLogEndRef = useRef<HTMLDivElement>(null);
 
-  const githubCliCommand = `cd /opt/control_pc && git pull origin main && npm install --legacy-peer-deps && npm run build && systemctl restart control_pc`;
+  const githubCliCommand = `bash /opt/control_pc/update_from_github.sh || (cd /opt/control_pc && git fetch origin main && git reset --hard origin/main && npm install --legacy-peer-deps && npm run build && systemctl restart control_pc)`;
 
-  const startGithubUpdate = () => {
+  // Carregar estado real do repositório
+  useEffect(() => {
+    fetch('/api/admin/github-status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setGithubStatus(data);
+          if (data.lastUpdated) {
+            const date = new Date(data.lastUpdated);
+            const formatted = `${date.toLocaleDateString('pt-PT')} às ${date.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}`;
+            const commitTag = data.localCommit ? ` (${data.localCommit})` : '';
+            setLastGithubUpdate(`${formatted}${commitTag}`);
+          } else if (data.localCommit && data.localCommit !== 'unknown') {
+            setLastGithubUpdate(`Commit ${data.localCommit}`);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Contagem decrescente para recarregar a página automaticamente após atualização bem sucedida
+  useEffect(() => {
+    if (autoReloadCountdown === null) return;
+    if (autoReloadCountdown <= 0) {
+      window.location.reload();
+      return;
+    }
+    const timer = setTimeout(() => {
+      setAutoReloadCountdown((prev) => (prev !== null ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [autoReloadCountdown]);
+
+  // Scroll automático no log do terminal
+  useEffect(() => {
+    if (terminalLogEndRef.current) {
+      terminalLogEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [githubLogs]);
+
+  const startGithubUpdate = async () => {
     setIsGithubModalOpen(true);
     setIsUpdatingGithub(true);
     setGithubStep(1);
+    setGithubError(null);
+    setAutoReloadCountdown(null);
+    setGithubLogs([
+      '$ bash /opt/control_pc/update_from_github.sh',
+      '[1/5] A verificar diretório e repositório...',
+    ]);
 
-    setTimeout(() => {
-      setGithubStep(2); // git pull origin main
-      setTimeout(() => {
-        setGithubStep(3); // npm install
-        setTimeout(() => {
-          setGithubStep(4); // npm run build
-          setTimeout(() => {
-            setGithubStep(5); // systemctl restart control_pc
-            setIsUpdatingGithub(false);
-            const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-            setLastGithubUpdate(`Hoje às ${now}`);
-            onSyncOptDirectory();
-          }, 1200);
-        }, 1100);
-      }, 1200);
-    }, 1000);
+    // Animar os passos visualmente enquanto o processo corre no backend
+    const stepTimer1 = setTimeout(() => {
+      setGithubStep(2);
+      setGithubLogs((prev) => [...prev, '[2/5] A ligar a https://github.com/wsmigas/Control_PC.git (git fetch)...']);
+    }, 1500);
+
+    const stepTimer2 = setTimeout(() => {
+      setGithubStep(3);
+      setGithubLogs((prev) => [...prev, '[3/5] A sincronizar dependências (npm install --legacy-peer-deps)...']);
+    }, 4500);
+
+    const stepTimer3 = setTimeout(() => {
+      setGithubStep(4);
+      setGithubLogs((prev) => [...prev, '[4/5] A compilar nova versão (npm run build)...']);
+    }, 9000);
+
+    try {
+      const response = await fetch('/api/admin/github-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      clearTimeout(stepTimer3);
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setGithubStep(5);
+        setIsUpdatingGithub(false);
+        const finalLogs = data.logs && data.logs.length > 0 ? data.logs : ['[✓] Atualização concluída com sucesso!'];
+        setGithubLogs(finalLogs);
+
+        const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        const commitInfo = data.commit ? ` (${data.commit})` : '';
+        setLastGithubUpdate(`Hoje às ${now}${commitInfo}`);
+        setGithubStatus((prev) => ({
+          ...prev,
+          localCommit: data.commit,
+          isUpToDate: true,
+        }));
+        onSyncOptDirectory();
+        // Iniciar recarregamento automático em 5 segundos
+        setAutoReloadCountdown(5);
+      } else {
+        setIsUpdatingGithub(false);
+        const errMsg = data.error || 'Falha durante o processo de atualização via GitHub';
+        setGithubError(errMsg);
+        if (data.logs && data.logs.length > 0) {
+          setGithubLogs(data.logs);
+        } else {
+          setGithubLogs((prev) => [...prev, `[ERRO] ${errMsg}`]);
+        }
+      }
+    } catch (err: any) {
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      clearTimeout(stepTimer3);
+      setIsUpdatingGithub(false);
+      const errMsg = err.message || 'Erro de comunicação com o servidor';
+      setGithubError(errMsg);
+      setGithubLogs((prev) => [...prev, `[ERRO DE LIGAÇÃO] ${errMsg}`]);
+    }
   };
+
 
   // Handle Save
   const handleSaveNetworkConfig = (e: React.FormEvent) => {
@@ -505,9 +610,19 @@ WantedBy=multi-user.target`;
                   Atualização via GitHub
                 </h4>
               </div>
-              <span className="text-[11px] text-cyan-400 font-mono">
-                main branch
-              </span>
+              {githubStatus.isUpToDate === false ? (
+                <span className="text-[11px] text-amber-300 bg-amber-950/80 border border-amber-500/50 px-2 py-0.5 rounded-full font-semibold animate-pulse">
+                  Atualização disponível ({githubStatus.remoteCommit})
+                </span>
+              ) : githubStatus.isUpToDate === true ? (
+                <span className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full font-mono">
+                  Sincronizado ({githubStatus.localCommit})
+                </span>
+              ) : (
+                <span className="text-[11px] text-cyan-400 font-mono">
+                  main branch
+                </span>
+              )}
             </div>
 
             <div className="space-y-3 text-xs">
@@ -516,8 +631,9 @@ WantedBy=multi-user.target`;
                 <div className="text-cyan-300 font-bold truncate">
                   https://github.com/wsmigas/Control_PC.git
                 </div>
-                <div className="text-slate-500 text-[10px] pt-1">
-                  Diretoria local: /opt/control_pc · Script: update_from_github.sh
+                <div className="text-slate-500 text-[10px] pt-1 flex items-center justify-between">
+                  <span>Diretoria: {githubStatus.localCommit ? `/opt/control_pc (${githubStatus.localCommit})` : '/opt/control_pc'}</span>
+                  <span>Branch: main</span>
                 </div>
               </div>
 
@@ -530,7 +646,7 @@ WantedBy=multi-user.target`;
                 <button
                   type="button"
                   onClick={startGithubUpdate}
-                  className="flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black transition-colors shadow-sm"
+                  className="flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black transition-colors shadow-sm cursor-pointer"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   <span>Atualizar Site Agora</span>
@@ -539,7 +655,7 @@ WantedBy=multi-user.target`;
                 <button
                   type="button"
                   onClick={() => copyToClipboard(githubCliCommand, 'git-cli')}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
                 >
                   {copiedCmd === 'git-cli' ? (
                     <>
@@ -819,26 +935,90 @@ WantedBy=multi-user.target`;
                 </div>
               </div>
 
-              {/* Console log simulator */}
-              <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-[11px] text-slate-400 space-y-1">
-                <div className="text-cyan-400 font-semibold">$ /opt/control_pc/update_from_github.sh</div>
-                {githubStep >= 1 && <div className="text-slate-300">[1/5] Conexão com https://github.com/wsmigas/Control_PC estabelecida.</div>}
-                {githubStep >= 2 && <div className="text-slate-300">[2/5] git pull origin main: Commits sincronizados com sucesso.</div>}
-                {githubStep >= 3 && <div className="text-slate-300">[3/5] npm install --legacy-peer-deps: Dependências resolvidas sem erros de peer-deps.</div>}
-                {githubStep >= 4 && <div className="text-slate-300">[4/5] npm run build: 1670 módulos transformados, dist/ gerado em 610ms.</div>}
-                {githubStep >= 5 && <div className="text-emerald-400 font-semibold">[5/5] systemctl restart control_pc: Serviço reiniciado com sucesso!</div>}
+              {/* Real Terminal Log Output */}
+              <div className="rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-hidden shadow-inner">
+                <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400">
+                  <div className="flex items-center gap-1.5">
+                    <Terminal className="h-3.5 w-3.5 text-cyan-400" />
+                    <span className="font-semibold text-slate-200">Terminal de Atualização</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(githubLogs.join('\n'), 'git-logs')}
+                    className="hover:text-cyan-300 text-slate-400 cursor-pointer"
+                  >
+                    {copiedCmd === 'git-logs' ? 'Logs Copiados!' : 'Copiar Logs'}
+                  </button>
+                </div>
+                <div className="p-3 max-h-48 overflow-y-auto space-y-1 scrollbar-thin">
+                  {githubLogs.map((log, idx) => {
+                    const isError = log.includes('[ERRO') || log.includes('error:') || log.includes('[FALHA') || log.includes('[STDERR');
+                    const isSuccess = log.includes('[✓]') || log.includes('sucesso') || log.includes('Success');
+                    const isStep = log.startsWith('[');
+                    return (
+                      <div
+                        key={idx}
+                        className={
+                          isError
+                            ? 'text-rose-400 font-semibold'
+                            : isSuccess
+                            ? 'text-emerald-400 font-semibold'
+                            : isStep
+                            ? 'text-cyan-300'
+                            : 'text-slate-300'
+                        }
+                      >
+                        {log}
+                      </div>
+                    );
+                  })}
+                  <div ref={terminalLogEndRef} />
+                </div>
               </div>
 
-              {/* Status banner */}
-              {githubStep === 5 && (
-                <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/40 rounded-lg text-xs text-emerald-300 flex items-center gap-2.5">
-                  <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <div>
-                    <strong>Painel atualizado com sucesso!</strong>
-                    <p className="text-[11px] text-emerald-300/80 mt-0.5">
-                      O site está agora a correr a versão mais recente do repositório <code className="text-white font-mono">wsmigas/Control_PC</code>.
-                    </p>
+              {/* Error Banner */}
+              {githubError && (
+                <div className="p-3.5 bg-rose-950/60 border border-rose-500/50 rounded-lg text-xs text-rose-200 space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center gap-2 font-bold text-rose-300">
+                    <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+                    <span>Falha na Atualização</span>
                   </div>
+                  <p className="text-[11px] text-rose-200/90 font-mono break-all">{githubError}</p>
+                  <p className="text-[11px] text-slate-300 pt-1">
+                    Dica: Pode executar diretamente no terminal do servidor com o comando:{' '}
+                    <code className="text-cyan-300 bg-slate-900 px-1 py-0.5 rounded font-mono">
+                      bash /opt/control_pc/update_from_github.sh
+                    </code>
+                  </p>
+                </div>
+              )}
+
+              {/* Success Banner */}
+              {githubStep === 5 && !githubError && (
+                <div className="p-4 bg-emerald-950/50 border border-emerald-500/50 rounded-lg text-xs text-emerald-200 space-y-2.5 animate-in fade-in">
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0" />
+                    <div>
+                      <strong className="text-white text-sm">Painel atualizado com sucesso!</strong>
+                      <p className="text-[11px] text-emerald-300/90 mt-0.5">
+                        Ficheiros sincronizados e nova versão compilada a partir de <code className="text-white font-mono">wsmigas/Control_PC (main)</code>.
+                      </p>
+                    </div>
+                  </div>
+                  {autoReloadCountdown !== null && (
+                    <div className="flex items-center justify-between pt-2 border-t border-emerald-500/30 text-[11px] text-emerald-300">
+                      <span>
+                        A recarregar página em <strong>{autoReloadCountdown}s</strong> para refletir todas as mudanças...
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        className="px-2.5 py-1 bg-emerald-400 text-black font-bold rounded text-xs hover:bg-emerald-300 transition-colors cursor-pointer"
+                      >
+                        Recarregar Agora (F5)
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -848,31 +1028,51 @@ WantedBy=multi-user.target`;
               <button
                 type="button"
                 onClick={() => setIsGithubModalOpen(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white"
+                className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white cursor-pointer"
               >
                 Fechar
               </button>
 
-              <button
-                type="button"
-                disabled={isUpdatingGithub}
-                onClick={githubStep === 5 ? () => setIsGithubModalOpen(false) : startGithubUpdate}
-                className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 rounded-lg transition-colors shadow-sm"
-              >
-                {isUpdatingGithub ? (
-                  <>
-                    <Activity className="h-4 w-4 animate-spin" />
-                    <span>A Atualizar...</span>
-                  </>
+              <div className="flex items-center gap-2">
+                {githubError ? (
+                  <button
+                    type="button"
+                    onClick={startGithubUpdate}
+                    className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors cursor-pointer shadow-sm"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>Tentar Novamente</span>
+                  </button>
                 ) : githubStep === 5 ? (
-                  <span>Concluído</span>
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="flex items-center gap-2 px-5 py-2 text-xs font-bold text-black bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer shadow-sm"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>Recarregar Página (F5)</span>
+                  </button>
                 ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4" />
-                    <span>Executar Atualização</span>
-                  </>
+                  <button
+                    type="button"
+                    disabled={isUpdatingGithub}
+                    onClick={startGithubUpdate}
+                    className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 rounded-lg transition-colors shadow-sm cursor-pointer"
+                  >
+                    {isUpdatingGithub ? (
+                      <>
+                        <Activity className="h-4 w-4 animate-spin" />
+                        <span>A Atualizar...</span>
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        <span>Executar Atualização</span>
+                      </>
+                    )}
+                  </button>
                 )}
-              </button>
+              </div>
             </div>
           </div>
         </div>

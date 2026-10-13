@@ -321,7 +321,8 @@ export const AppsManagementTab: React.FC<AppsManagementTabProps> = ({
                     </td>
                   </tr>
                 );
-              })}
+              })
+            )}
             </tbody>
           </table>
         </div>

@@ -482,7 +482,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   </div>
                 </div>
               );
-            })}
+            })
+          )}
           </div>
         </div>
 

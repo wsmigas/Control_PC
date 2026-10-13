@@ -2,6 +2,10 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -467,6 +471,140 @@ app.get('/api/regras.json', (req, res) => {
   });
 });
 
+// 12. Obter estado do repositório GitHub e versão local instalada
+app.get('/api/admin/github-status', async (req, res) => {
+  try {
+    const updateFile = path.join(DATA_DIR, 'last_update.json');
+    let lastUpdateInfo: any = {};
+    if (fs.existsSync(updateFile)) {
+      try {
+        lastUpdateInfo = JSON.parse(fs.readFileSync(updateFile, 'utf-8'));
+      } catch {}
+    }
+
+    const appDir = fs.existsSync('/opt/control_pc') ? '/opt/control_pc' : __dirname;
+    let localCommit = lastUpdateInfo.commit || 'unknown';
+
+    // Verificar commit local via git se disponível
+    try {
+      const { stdout } = await execAsync('git rev-parse --short HEAD', { cwd: appDir });
+      if (stdout.trim()) {
+        localCommit = stdout.trim();
+      }
+    } catch {}
+
+    // Consultar último commit remoto no GitHub
+    let remoteCommit = 'eb3aaba';
+    try {
+      const { stdout } = await execAsync('git ls-remote https://github.com/wsmigas/Control_PC.git HEAD', { timeout: 8000 });
+      const firstPart = stdout.trim().split(/\s+/)[0];
+      if (firstPart) {
+        remoteCommit = firstPart.substring(0, 7);
+      }
+    } catch {}
+
+    res.json({
+      success: true,
+      directory: appDir,
+      localCommit,
+      remoteCommit,
+      isUpToDate: localCommit !== 'unknown' && localCommit === remoteCommit,
+      lastUpdated: lastUpdateInfo.lastUpdated || null,
+      repoUrl: 'https://github.com/wsmigas/Control_PC.git',
+    });
+  } catch (err: any) {
+    res.json({
+      success: false,
+      error: err.message,
+      repoUrl: 'https://github.com/wsmigas/Control_PC.git',
+    });
+  }
+});
+
+// 13. Executar atualização REAL a partir do GitHub
+app.post('/api/admin/github-update', async (req, res) => {
+  const logs: string[] = [];
+  const addLog = (msg: string) => {
+    logs.push(msg);
+    console.log(`[GitHub Update] ${msg}`);
+  };
+
+  const appDir = fs.existsSync('/opt/control_pc') ? '/opt/control_pc' : __dirname;
+  addLog(`[1/5] Início da atualização no diretório: ${appDir}`);
+
+  try {
+    const scriptPath = path.join(__dirname, 'update_from_github.sh');
+    let updateCmd = `bash "${scriptPath}"`;
+    if (!fs.existsSync(scriptPath)) {
+      updateCmd = `cd "${appDir}" && git fetch origin main && git reset --hard origin/main && npm install --legacy-peer-deps --no-audit && npm run build`;
+    }
+
+    addLog(`[2/5] A sincronizar com https://github.com/wsmigas/Control_PC.git e a compilar nova versão...`);
+
+    const { stdout, stderr } = await execAsync(updateCmd, {
+      cwd: appDir,
+      timeout: 180000,
+      env: { ...process.env, PATH: process.env.PATH },
+    });
+
+    if (stdout) {
+      stdout.split('\n').map(l => l.trim()).filter(Boolean).forEach(l => logs.push(l));
+    }
+    if (stderr && stderr.includes('error:')) {
+      logs.push(`[AVISO] ${stderr.trim()}`);
+    }
+
+    // Obter hash do commit agora ativo
+    let currentCommit = 'latest';
+    try {
+      const { stdout: commitOut } = await execAsync('git rev-parse --short HEAD', { cwd: appDir });
+      currentCommit = commitOut.trim();
+    } catch {}
+
+    const nowIso = new Date().toISOString();
+    const updateInfo = {
+      lastUpdated: nowIso,
+      commit: currentCommit,
+    };
+    try {
+      fs.writeFileSync(path.join(DATA_DIR, 'last_update.json'), JSON.stringify(updateInfo, null, 2), 'utf-8');
+    } catch {}
+
+    currentState.logs.unshift({
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString('pt-PT'),
+      type: 'success',
+      message: `Painel SentinelPC atualizado via GitHub com sucesso (Commit ${currentCommit}).`,
+      source: 'update_from_github',
+    });
+    saveState();
+
+    addLog(`[✓] Sucesso: Aplicação compilada e atualizada na versão ${currentCommit}!`);
+
+    res.json({
+      success: true,
+      logs,
+      commit: currentCommit,
+      message: `Painel atualizado com sucesso! (Versão: ${currentCommit})`,
+    });
+  } catch (err: any) {
+    const errMsg = err.message || 'Falha durante execução do script de atualização';
+    addLog(`[FALHA] ${errMsg}`);
+    if (err.stdout) {
+      err.stdout.split('\n').map((l: string) => l.trim()).filter(Boolean).forEach((l: string) => logs.push(l));
+    }
+    if (err.stderr) {
+      err.stderr.split('\n').map((l: string) => l.trim()).filter(Boolean).forEach((l: string) => logs.push(`[STDERR] ${l}`));
+    }
+
+    res.status(500).json({
+      success: false,
+      logs,
+      error: errMsg,
+    });
+  }
+});
+
 // -----------------------------------------------------------------------------
 // FRONTEND SERVER SETUP
 // -----------------------------------------------------------------------------
@@ -474,9 +612,24 @@ app.get('/api/regras.json', (req, res) => {
 async function startServer() {
   const distPath = path.join(__dirname, 'dist');
   if (fs.existsSync(distPath)) {
-    app.use(express.static(distPath));
+    // Servir ficheiros estáticos garantindo que index.html NUNCA fica em cache no browser
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }));
+
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api')) return next();
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
