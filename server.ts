@@ -274,8 +274,12 @@ app.post('/api/pcs', (req, res) => {
     lastSeen: existing.lastSeen || 'A aguardar primeira conexão',
   };
 
-  if (!currentState.ativo) {
+  if (!currentState.ativo || currentState.ativo === pid) {
     currentState.ativo = pid;
+    currentState.agent.targetMachine = currentState.pcs[pid].nome;
+    currentState.agent.targetUser = currentState.pcs[pid].target_user;
+    currentState.agent.ipAddress = currentState.pcs[pid].host;
+    currentState.agent.connectionMethod = currentState.pcs[pid].connectionMethod;
   }
 
   currentState.logs.unshift({
@@ -355,28 +359,88 @@ app.post('/api/report', (req, res) => {
   const timeStr = now.toLocaleTimeString('pt-PT');
   const currentHour = now.getHours();
 
-  // Find or determine PC
-  let activePc = getActivePc();
-  let pid = pcId || activePc.id;
+  // Determine client IP
+  const rawIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip || '127.0.0.1';
+  const cleanClientIp = rawIp.split(',')[0].trim().replace(/^::ffff:/, '');
 
-  // Match by targetUser or machine if pcId not given
-  if (!currentState.pcs[pid]) {
-    const foundEntry = Object.entries(currentState.pcs).find(([_, p]: any) =>
-      p.host === req.ip || p.target_user.toLowerCase() === (targetUser || '').toLowerCase()
-    );
-    if (foundEntry) {
-      pid = foundEntry[0];
-      activePc = foundEntry[1] as any;
+  // Find or determine PC
+  let activePc: any = getActivePc();
+  let pid: string = (pcId && currentState.pcs[pcId]) ? pcId : activePc.id;
+
+  if (pcId && currentState.pcs[pcId]) {
+    pid = pcId;
+    activePc = currentState.pcs[pcId];
+  } else {
+    // Match existing PC by hostname, targetUser or host IP
+    const entries = Object.entries(currentState.pcs || {});
+    const found = entries.find(([_, p]: any) => {
+      if (targetMachine && p.nome && p.nome.toLowerCase() === targetMachine.toLowerCase()) return true;
+      if (targetUser && p.target_user && p.target_user.toLowerCase() === targetUser.toLowerCase()) return true;
+      if (p.host && (p.host === cleanClientIp || (cleanClientIp !== '127.0.0.1' && p.host === req.ip))) return true;
+      return false;
+    });
+
+    if (found) {
+      pid = found[0];
+      activePc = found[1];
+    } else {
+      // If default placeholder 'pc1' has never connected, adopt it for the first reporting machine
+      const defaultPc = currentState.pcs['pc1'];
+      if (defaultPc && defaultPc.lastSeen === 'A aguardar primeira conexão' && !defaultPc.isOnline && Object.keys(currentState.pcs).length === 1) {
+        pid = 'pc1';
+        activePc = defaultPc;
+        activePc.nome = targetMachine || 'PC Principal';
+        activePc.target_user = targetUser || defaultPc.target_user;
+        if (cleanClientIp && cleanClientIp !== '127.0.0.1') {
+          activePc.host = cleanClientIp;
+        }
+      } else {
+        // Auto-register brand new PC!
+        pid = `pc_${Date.now().toString(36)}`;
+        activePc = {
+          id: pid,
+          nome: targetMachine || `PC de ${targetUser || 'Testes'}`,
+          host: cleanClientIp !== '127.0.0.1' ? cleanClientIp : '192.168.1.150',
+          connectionMethod: 'agent_poll',
+          target_user: targetUser || 'Utilizador',
+          ssh_user: '',
+          ssh_password: '',
+          ssh_key: '',
+          port: 5985,
+          isOnline: true,
+          lastSeen: 'Agora mesmo',
+          lastSeenTs: Date.now(),
+        };
+        currentState.pcs[pid] = activePc;
+
+        currentState.logs.unshift({
+          id: `log-${Date.now()}`,
+          timestamp: timeStr,
+          type: 'success',
+          message: `Novo computador auto-detetado e registado: "${activePc.nome}" (${activePc.target_user} @ ${activePc.host})!`,
+          source: 'vigia.ps1',
+        });
+      }
     }
   }
 
   // Update PC status
-  if (currentState.pcs[pid]) {
-    currentState.pcs[pid].isOnline = true;
-    currentState.pcs[pid].lastSeen = 'Agora mesmo';
-    currentState.pcs[pid].lastSeenTs = Date.now();
-    if (targetMachine) currentState.pcs[pid].nome = currentState.pcs[pid].nome || targetMachine;
-    if (targetUser) currentState.pcs[pid].target_user = targetUser;
+  activePc.isOnline = true;
+  activePc.lastSeen = 'Agora mesmo';
+  activePc.lastSeenTs = Date.now();
+  if (targetMachine) activePc.nome = activePc.nome || targetMachine;
+  if (targetUser) activePc.target_user = targetUser;
+  if (cleanClientIp && cleanClientIp !== '127.0.0.1' && (!activePc.host || activePc.host === '192.168.1.145')) {
+    activePc.host = cleanClientIp;
+  }
+
+  // If this is the active PC or none is set, sync agent state
+  if (currentState.ativo === pid || !currentState.ativo) {
+    currentState.ativo = pid;
+    currentState.agent.targetMachine = activePc.nome;
+    currentState.agent.targetUser = activePc.target_user;
+    currentState.agent.ipAddress = activePc.host;
+    currentState.agent.connectionMethod = activePc.connectionMethod || 'agent_poll';
   }
 
   currentState.isRealData = true;
@@ -789,8 +853,9 @@ app.get('/api/estado', (req, res) => {
 
 // 15. Servir o Agente PowerShell Avançado (vigia.ps1)
 app.get('/api/agent/vigia.ps1', (req, res) => {
-  const host = req.get('host') || '127.0.0.1:3000';
-  const protocol = req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host') || '127.0.0.1:3000';
+  const rawProto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+  const protocol = rawProto.split(',')[0].trim();
   const serverUrl = `${protocol}://${host}`;
 
   const script = `# ================================================================
@@ -923,8 +988,9 @@ while ($true) {
 
 // 16. Servir Instalador Automático de 1 Linha (install.ps1)
 app.get('/api/agent/install.ps1', (req, res) => {
-  const host = req.get('host') || '127.0.0.1:3000';
-  const protocol = req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host') || '127.0.0.1:3000';
+  const rawProto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+  const protocol = rawProto.split(',')[0].trim();
   const serverUrl = `${protocol}://${host}`;
 
   const script = `# ================================================================

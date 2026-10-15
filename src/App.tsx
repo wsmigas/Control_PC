@@ -11,6 +11,7 @@ import { CurfewTab } from './components/CurfewTab';
 import { WebFilterTab } from './components/WebFilterTab';
 import { AgentConsoleTab } from './components/AgentConsoleTab';
 import { AdminTab } from './components/AdminTab';
+import { ActionsTab } from './components/ActionsTab';
 import { EditLimitModal } from './components/EditLimitModal';
 import { ConnectAgentModal } from './components/ConnectAgentModal';
 import {
@@ -29,6 +30,7 @@ import {
   BlockedDomain,
   AgentIntegrity,
   SystemLogEntry,
+  PCConfig,
 } from './types';
 import { ShieldAlert, CheckCircle, Info } from 'lucide-react';
 
@@ -80,6 +82,8 @@ export default function App() {
 
   const [agent, setAgent] = useState<AgentIntegrity>(INITIAL_AGENT);
   const [logs, setLogs] = useState<SystemLogEntry[]>(INITIAL_LOGS);
+  const [pcsList, setPcsList] = useState<PCConfig[]>([]);
+  const [activePcId, setActivePcId] = useState<string>('pc1');
 
   // Modal state
   const [editingApp, setEditingApp] = useState<AppUsageRecord | null>(null);
@@ -101,6 +105,8 @@ export default function App() {
             if (data.hourlyActivity) setHourlyActivity(data.hourlyActivity);
             if (data.agent) setAgent((prev) => ({ ...prev, ...data.agent }));
             if (data.logs) setLogs(data.logs);
+            if (Array.isArray(data.pcsList)) setPcsList(data.pcsList);
+            if (data.activePc?.id) setActivePcId(data.activePc.id);
           }
         }
       } catch {
@@ -437,15 +443,132 @@ export default function App() {
     showToast('Sincronização com /opt/control_pc concluída!', 'success');
   };
 
+  const handleSelectPc = async (id: string) => {
+    setActivePcId(id);
+    try {
+      const res = await fetch('/api/pcs/selecionar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pc) {
+          setAgent((prev) => ({
+            ...prev,
+            targetMachine: data.pc.nome,
+            targetUser: data.pc.target_user,
+            ipAddress: data.pc.host,
+            connectionMethod: data.pc.connectionMethod || 'agent_poll',
+          }));
+        }
+        showToast(`Computador ativo: ${data.pc?.nome || id}`, 'info');
+      }
+    } catch {
+      // offline fallback
+    }
+  };
+
+  const handleSavePc = async (pcData: Partial<PCConfig>) => {
+    const res = await fetch('/api/pcs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pcData),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Erro ao guardar computador');
+    }
+    const data = await res.json();
+    if (Array.isArray(data.pcs)) {
+      setPcsList(data.pcs);
+    }
+    if (data.ativo) {
+      setActivePcId(data.ativo);
+      const active = data.pcs?.find((p: any) => p.id === data.ativo);
+      if (active) {
+        setAgent((prev) => ({
+          ...prev,
+          targetMachine: active.nome,
+          targetUser: active.target_user,
+          ipAddress: active.host,
+          connectionMethod: active.connectionMethod || 'agent_poll',
+        }));
+      }
+    }
+    showToast(`Computador "${pcData.nome}" guardado com sucesso!`, 'success');
+  };
+
+  const handleDeletePc = async (id: string) => {
+    const res = await fetch(`/api/pcs/${id}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Erro ao remover computador');
+    }
+    const data = await res.json();
+    setPcsList((prev) => prev.filter((p) => p.id !== id));
+    if (data.ativo) {
+      setActivePcId(data.ativo);
+    }
+    showToast('Computador removido com sucesso.', 'info');
+  };
+
+  const handleSendMessage = async (text: string) => {
+    const res = await fetch('/api/msg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Erro ao enviar mensagem');
+    }
+    showToast('Mensagem enviada para o ecrã do computador.', 'success');
+  };
+
+  const handlePowerAction = async (action: 'logoff' | 'shutdown' | 'restart' | 'cancel') => {
+    const res = await fetch('/api/power', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Erro ao executar ordem de energia');
+    }
+    const msgs: Record<string, string> = {
+      logoff: 'Ordem de terminar sessão enviada.',
+      shutdown: 'Ordem de encerramento (60s) enviada ao PC.',
+      restart: 'Ordem de reinício (60s) enviada ao PC.',
+      cancel: 'Encerramento agendado cancelado.',
+    };
+    showToast(msgs[action] || `Comando ${action} enviado ao PC.`, 'alert');
+  };
+
+  const currentActivePc: PCConfig = pcsList.find((p) => p.id === activePcId) || {
+    id: activePcId || 'pc1',
+    nome: agent.targetMachine,
+    host: agent.ipAddress,
+    target_user: agent.targetUser,
+    connectionMethod: (agent.connectionMethod as any) || 'agent_poll',
+    isOnline: agent.installationStatus === 'installed',
+    lastSeen: agent.lastSyncTime || 'A aguardar primeira conexão',
+  };
+
   return (
     <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col font-sans">
-      {/* Header with Top Bar Contract */}
+      {/* Header with Top Bar Contract & Multi-PC Selector */}
       <Header
         currentTab={currentTab}
         onTabChange={setCurrentTab}
         emergencyLock={agent.emergencyLock}
         onToggleEmergencyLock={handleToggleEmergencyLock}
         targetMachine={agent.targetMachine}
+        pcsList={pcsList}
+        activePcId={activePcId}
+        onSelectPc={handleSelectPc}
       />
 
       {/* Emergency Lock Active Banner */}
@@ -473,13 +596,13 @@ export default function App() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsConnectModalOpen(true)}
-            className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors"
+            className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors cursor-pointer"
           >
             Diagnóstico / Testar
           </button>
           <button
             onClick={handleResetAgentData}
-            className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors"
+            className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors cursor-pointer"
             title="Limpar todos os dados e contadores"
           >
             Limpar Dados (0m)
@@ -513,6 +636,16 @@ export default function App() {
           />
         )}
 
+        {currentTab === 'actions' && (
+          <ActionsTab
+            activePc={currentActivePc}
+            onSendMessage={handleSendMessage}
+            onPowerAction={handlePowerAction}
+            emergencyLock={agent.emergencyLock}
+            onToggleEmergencyLock={handleToggleEmergencyLock}
+          />
+        )}
+
         {currentTab === 'curfew' && (
           <CurfewTab
             schedule={curfewSchedule}
@@ -543,6 +676,11 @@ export default function App() {
         {currentTab === 'admin' && (
           <AdminTab
             agent={agent}
+            pcsList={pcsList}
+            activePcId={activePcId}
+            onSelectPc={handleSelectPc}
+            onSavePc={handleSavePc}
+            onDeletePc={handleDeletePc}
             onUpdateAgentConfig={handleUpdateAgentConfig}
             onRunInstallWizard={() => setIsConnectModalOpen(true)}
             onSyncOptDirectory={handleSyncOptDirectory}

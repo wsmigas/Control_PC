@@ -1,18 +1,18 @@
 {
   "isRealData": true,
   "agent": {
-    "targetUser": "Filho",
-    "targetMachine": "PC-TESTE",
+    "targetUser": "tomas_teste",
+    "targetMachine": "PC-TESTES-WIN",
     "ipAddress": "192.168.1.145",
     "port": 5985,
-    "connectionMethod": "winrm",
+    "connectionMethod": "agent_poll",
     "pollingIntervalSeconds": 60,
     "osVersion": "Windows 11",
     "version": "2.4.2-blobs",
     "processesCount": 0,
-    "taskStatus": "À espera de relatórios...",
+    "taskStatus": "À espera de relatórios do agente...",
     "sha256Hash": "9a7e3b18c6e245a498263158f9104b901a82e75306e00b65cf5480e6113b2c1f",
-    "hashVerified": false,
+    "hashVerified": true,
     "lastSyncTime": "Nunca",
     "emergencyLock": false,
     "bonusMinutes": 0,
@@ -242,6 +242,27 @@
   ],
   "logs": [
     {
+      "id": "log-1792059602178",
+      "timestamp": "10:20:02",
+      "type": "info",
+      "message": "Dados e contadores de PC-TESTES-WIN repostos a zero.",
+      "source": "servidor"
+    },
+    {
+      "id": "log-1792059580413",
+      "timestamp": "10:19:40",
+      "type": "info",
+      "message": "Configurações do computador \"PC Testes\" guardadas com sucesso.",
+      "source": "admin"
+    },
+    {
+      "id": "log-1792059251944",
+      "timestamp": "10:14:11",
+      "type": "info",
+      "message": "Configurações do computador \"PC Teste\" guardadas com sucesso.",
+      "source": "admin"
+    },
+    {
       "id": "log-1791882061720",
       "timestamp": "09:01:01",
       "type": "info",
@@ -269,5 +290,29 @@
       "message": "Servidor SentinelPC inicializado. A aguardar conexão do agente Windows.",
       "source": "server"
     }
-  ]
+  ],
+  "pcs": {
+    "pc1": {
+      "id": "pc1",
+      "nome": "PC-TESTES-WIN",
+      "host": "192.168.1.145",
+      "port": 5985,
+      "connectionMethod": "agent_poll",
+      "ssh_user": "admin",
+      "ssh_password": "",
+      "ssh_key": "",
+      "target_user": "tomas_teste",
+      "isOnline": false,
+      "lastSeen": "Nunca",
+      "lastSeenTs": 1792059593025
+    }
+  },
+  "ativo": "pc1",
+  "pendingActions": {
+    "pc1": []
+  },
+  "runningProcesses": {
+    "pc1": []
+  },
+  "hardware": {}
 }

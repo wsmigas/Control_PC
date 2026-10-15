@@ -74,6 +74,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [formSshPwd, setFormSshPwd] = useState('');
   const [formSshKey, setFormSshKey] = useState('');
   const [pcFormError, setPcFormError] = useState<string | null>(null);
+  const [isSubmittingPc, setIsSubmittingPc] = useState(false);
 
   // Ping test state
   const [pingStatus, setPingStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
@@ -263,7 +264,7 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
   };
 
   // Guardar configuração do PC atual
-  const handleSaveNetworkConfig = (e: React.FormEvent) => {
+  const handleSaveNetworkConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateAgentConfig({
       ipAddress: ip,
@@ -273,6 +274,17 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
       connectionMethod: connMethod,
       pollingIntervalSeconds: Number(pollingInterval),
     });
+
+    if (onSavePc) {
+      await onSavePc({
+        id: activePcId,
+        nome: targetName,
+        host: ip,
+        target_user: username,
+        connectionMethod: connMethod === 'ssh' ? 'ssh' : 'agent_poll',
+        port: Number(port),
+      }).catch(() => {});
+    }
     setPingStatus('idle');
   };
 
@@ -312,22 +324,41 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
       return;
     }
 
-    if (onSavePc) {
-      try {
-        await onSavePc({
-          id: editingPcId || undefined,
-          nome: formPcName.trim(),
-          host: formPcHost.trim(),
-          target_user: formPcUser.trim(),
-          connectionMethod: formPcMethod,
-          ssh_user: formSshUser.trim(),
-          ssh_password: formSshPwd || undefined,
-          ssh_key: formSshKey.trim(),
+    setIsSubmittingPc(true);
+    setPcFormError(null);
+
+    const pcPayload: Partial<PCConfig> = {
+      id: editingPcId || undefined,
+      nome: formPcName.trim(),
+      host: formPcHost.trim(),
+      target_user: formPcUser.trim(),
+      connectionMethod: formPcMethod,
+      ssh_user: formSshUser.trim(),
+      ssh_password: formSshPwd || undefined,
+      ssh_key: formSshKey.trim(),
+    };
+
+    try {
+      if (onSavePc) {
+        await onSavePc(pcPayload);
+      } else {
+        // Fallback direto à API caso o prop não tenha sido passado
+        const res = await fetch('/api/pcs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pcPayload),
         });
-        setIsPcModalOpen(false);
-      } catch (err: any) {
-        setPcFormError(err.message || 'Erro ao guardar computador');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Erro ao guardar computador no servidor');
+        }
       }
+      setIsPcModalOpen(false);
+      setEditingPcId(null);
+    } catch (err: any) {
+      setPcFormError(err.message || 'Erro ao guardar computador');
+    } finally {
+      setIsSubmittingPc(false);
     }
   };
 
@@ -497,6 +528,19 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
               </div>
             );
           })}
+
+          {/* Add PC dashed card button */}
+          <button
+            type="button"
+            onClick={handleOpenNewPcModal}
+            className="p-4 rounded-xl border border-dashed border-slate-700/80 hover:border-cyan-500/60 bg-slate-900/30 hover:bg-cyan-950/20 text-slate-400 hover:text-cyan-300 transition-all flex flex-col items-center justify-center gap-2 min-h-[140px] cursor-pointer group"
+          >
+            <div className="p-2 rounded-lg bg-slate-800 group-hover:bg-cyan-500/20 text-cyan-400 transition-colors">
+              <Plus className="h-5 w-5" />
+            </div>
+            <span className="text-xs font-semibold">+ Adicionar Máquina</span>
+            <span className="text-[10px] text-slate-500 text-center">Adicione um novo PC Windows à consola</span>
+          </button>
         </div>
       </div>
 
@@ -853,9 +897,17 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300"
+                  disabled={isSubmittingPc}
+                  className="px-4 py-2 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                 >
-                  Guardar Computador
+                  {isSubmittingPc ? (
+                    <>
+                      <Activity className="h-3.5 w-3.5 animate-spin text-black" />
+                      <span>A guardar...</span>
+                    </>
+                  ) : (
+                    <span>Guardar Computador</span>
+                  )}
                 </button>
               </div>
             </form>
