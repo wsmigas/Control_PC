@@ -22,7 +22,6 @@ interface ConnectAgentModalProps {
   agent: AgentIntegrity;
   isRealMode: boolean;
   onProbeAgent: () => Promise<void>;
-  onTriggerTestReport: () => Promise<void>;
   onResetAgentData: () => Promise<void>;
 }
 
@@ -32,11 +31,9 @@ export const ConnectAgentModal: React.FC<ConnectAgentModalProps> = ({
   agent,
   isRealMode,
   onProbeAgent,
-  onTriggerTestReport,
   onResetAgentData,
 }) => {
   const [isProbing, setIsProbing] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -48,10 +45,10 @@ export const ConnectAgentModal: React.FC<ConnectAgentModalProps> = ({
 
   const handleProbe = async () => {
     setIsProbing(true);
-    setFeedback('A sondar o agente e a verificar relatórios no servidor...');
+    setFeedback('A consultar telemetria real no servidor...');
     try {
       await onProbeAgent();
-      setFeedback('Sondagem efetuada com sucesso!');
+      setFeedback('Telemetria atualizada com sucesso a partir do servidor.');
     } catch {
       setFeedback('Erro ao sondar o servidor.');
     } finally {
@@ -59,18 +56,6 @@ export const ConnectAgentModal: React.FC<ConnectAgentModalProps> = ({
     }
   };
 
-  const handleTestReport = async () => {
-    setIsTesting(true);
-    setFeedback('A enviar relatório de telemetria em direto...');
-    try {
-      await onTriggerTestReport();
-      setFeedback('Telemetria recebida! Modo em Tempo Real ativado com sucesso.');
-    } catch {
-      setFeedback('Falha ao enviar relatório.');
-    } finally {
-      setIsTesting(false);
-    }
-  };
 
   const handleReset = async () => {
     setIsResetting(true);
@@ -192,40 +177,28 @@ export const ConnectAgentModal: React.FC<ConnectAgentModalProps> = ({
           <span className="text-xs font-semibold text-slate-400 block">
             Ações de Diagnóstico e Controlo:
           </span>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {/* 1. Sondar */}
             <button
               type="button"
               disabled={isProbing}
               onClick={handleProbe}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer disabled:opacity-50"
             >
               <RotateCcw className={`h-3.5 w-3.5 text-cyan-400 ${isProbing ? 'animate-spin' : ''}`} />
-              <span>Sondar Agente</span>
+              <span>Sondar Telemetria Real</span>
             </button>
 
-            {/* 2. Testar Relatório */}
-            <button
-              type="button"
-              disabled={isTesting}
-              onClick={handleTestReport}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/40 transition-colors disabled:opacity-50"
-              title="Gera um relatório de teste e ativa o modo real imediatamente"
-            >
-              <Play className="h-3.5 w-3.5 text-cyan-400" />
-              <span>Ativar Modo Real</span>
-            </button>
-
-            {/* 3. Limpar Dados */}
+            {/* 2. Limpar Dados */}
             <button
               type="button"
               disabled={isResetting}
               onClick={handleReset}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 border border-rose-500/40 transition-colors disabled:opacity-50"
-              title="Limpa contadores e reinicia os dados do agente"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 border border-rose-500/40 transition-colors cursor-pointer disabled:opacity-50"
+              title="Limpa contadores e reinicia os dados do agente a zeros"
             >
               <Trash2 className="h-3.5 w-3.5 text-rose-400" />
-              <span>Limpar Dados</span>
+              <span>Limpar Dados (Repor a 0)</span>
             </button>
           </div>
         </div>

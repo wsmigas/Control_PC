@@ -35,14 +35,49 @@ export const AgentConsoleTab: React.FC<AgentConsoleTabProps> = ({
   agent,
   onRefreshTelemetry,
 }) => {
-  const [activeCodeTab, setActiveCodeTab] = useState<'regras' | 'blobs' | 'patch' | 'instalar'>('regras');
+  const [activeCodeTab, setActiveCodeTab] = useState<'regras' | 'vigia' | 'patch' | 'instalar'>('regras');
   const [copied, setCopied] = useState<string | null>(null);
-  const [sampleText, setSampleText] = useState<string>(
-    '# Exemplo de código do agente.ps1 para teste de fragmentação\n$ErrorActionPreference = "SilentlyContinue"\nWrite-Host "SentinelPC Watcher Online"\nGet-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle'
-  );
 
   const regrasJson = generateRegrasJson(apps, curfew, blockedDomains);
-  const sampleBlobs = generatePowerShellBlobString('bAg', sampleText, 2000);
+  const serverOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000';
+  const sampleBlobs = generatePowerShellBlobString('bAg', regrasJson, 80);
+
+  const vigiaScriptCode = `# ================================================================
+# SentinelPC - Script de Vigilância e Telemetria em Produção (vigia.ps1)
+# Executado a cada 60s no Windows de ${agent.targetUser} (${agent.targetMachine})
+# ================================================================
+$ErrorActionPreference = "SilentlyContinue"
+$ServerUrl = "${serverOrigin}"
+
+try {
+    # 1. Obter processo ativo em primeiro plano
+    $activeProc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.Id -ne $PID } | Select-Object -First 1
+    $procList = @(Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName).exe" } | Select-Object -Unique)
+
+    # 2. Montar relatório real de telemetria
+    $payload = @{
+        targetMachine = $env:COMPUTERNAME
+        targetUser = $env:USERNAME
+        activeProcess = if ($activeProc) { "$($activeProc.ProcessName).exe" } else { "idle" }
+        activeTitle = if ($activeProc) { $activeProc.MainWindowTitle } else { "Ambiente de Trabalho" }
+        runningProcesses = $procList
+        osVersion = (Get-CimInstance Win32_OperatingSystem).Caption
+    } | ConvertTo-Json
+
+    # 3. Enviar para a API do Servidor SentinelPC
+    $res = Invoke-RestMethod -Uri "$ServerUrl/api/report" -Method POST -Body $payload -ContentType "application/json" -TimeoutSec 5
+    
+    # 4. Se houver comandos para finalizar processos bloqueados
+    if ($res.killProcesses) {
+        foreach ($proc in $res.killProcesses) {
+            Stop-Process -Name ($proc -replace '\\.exe$','') -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch {
+    # Falha silenciosa para não incomodar o utilizador do PC
+}
+`;
+
 
   const pythonPatchCode = `# Patch aplicado com sucesso a /root/painel_pc.py
 # 1. Adicionado hashlib aos imports
@@ -194,14 +229,14 @@ if ($hok) { 'OK' } else { 'FALHA_HASH' }
               regras.json Atual
             </button>
             <button
-              onClick={() => setActiveCodeTab('blobs')}
+              onClick={() => setActiveCodeTab('vigia')}
               className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-                activeCodeTab === 'blobs'
+                activeCodeTab === 'vigia'
                   ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Simulador def blob()
+              vigia.ps1 (Produção)
             </button>
             <button
               onClick={() => setActiveCodeTab('patch')}
@@ -242,8 +277,8 @@ if ($hok) { 'OK' } else { 'FALHA_HASH' }
                 const text =
                   activeCodeTab === 'regras'
                     ? regrasJson
-                    : activeCodeTab === 'blobs'
-                    ? sampleBlobs
+                    : activeCodeTab === 'vigia'
+                    ? vigiaScriptCode
                     : activeCodeTab === 'patch'
                     ? pythonPatchCode
                     : installScriptPreview;
@@ -278,28 +313,14 @@ if ($hok) { 'OK' } else { 'FALHA_HASH' }
           </div>
         )}
 
-        {activeCodeTab === 'blobs' && (
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-xs text-slate-400 block">
-                Texto para Fragmentar em Base64 (Demonstração da função <code className="text-slate-300 font-mono">blob(var, texto, tam=2000)</code>):
-              </label>
-              <textarea
-                rows={3}
-                value={sampleText}
-                onChange={(e) => setSampleText(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-800 bg-slate-950 text-xs font-mono text-slate-200 focus:outline-hidden focus:border-cyan-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <span className="text-xs text-slate-400">
-                Resultado em Linhas Curtas de PowerShell (evita estouro de buffer no stdin):
-              </span>
-              <pre className="p-4 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-purple-300 overflow-x-auto max-h-80 leading-relaxed">
-                {sampleBlobs}
-              </pre>
-            </div>
+        {activeCodeTab === 'vigia' && (
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Script real em execução no computador Windows de <strong className="text-white">{agent.targetUser}</strong>. Monitoriza janelas ativas em tempo real e envia relatórios a cada 60s:
+            </p>
+            <pre className="p-4 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-cyan-300 overflow-x-auto max-h-96 leading-relaxed">
+              {vigiaScriptCode}
+            </pre>
           </div>
         )}
 

@@ -19,45 +19,71 @@ import {
   Activity,
   Trash2,
   GitBranch,
-  RefreshCw
+  RefreshCw,
+  Plus,
+  Edit2,
+  CheckCircle,
+  HelpCircle,
+  Radio
 } from 'lucide-react';
-import { AgentIntegrity } from '../types';
+import { AgentIntegrity, PCConfig } from '../types';
 
 interface AdminTabProps {
   agent: AgentIntegrity;
+  pcsList?: PCConfig[];
+  activePcId?: string;
+  onSelectPc?: (id: string) => void;
+  onSavePc?: (pc: Partial<PCConfig>) => Promise<void>;
+  onDeletePc?: (id: string) => Promise<void>;
   onUpdateAgentConfig: (updates: Partial<AgentIntegrity>) => void;
   onRunInstallWizard: () => void;
   onSyncOptDirectory: () => void;
   onOpenConnectModal?: () => void;
   onResetAgentData?: () => void;
-  onLoadDemoData?: () => void;
 }
 
 export const AdminTab: React.FC<AdminTabProps> = ({
   agent,
+  pcsList = [],
+  activePcId = 'pc1',
+  onSelectPc,
+  onSavePc,
+  onDeletePc,
   onUpdateAgentConfig,
   onRunInstallWizard,
   onSyncOptDirectory,
   onOpenConnectModal,
   onResetAgentData,
-  onLoadDemoData,
 }) => {
-  // Form fields
+  // Active PC form fields
   const [ip, setIp] = useState(agent.ipAddress);
   const [targetName, setTargetName] = useState(agent.targetMachine);
   const [username, setUsername] = useState(agent.targetUser);
   const [port, setPort] = useState(agent.port || 5985);
-  const [connMethod, setConnMethod] = useState(agent.connectionMethod || 'winrm');
-  const [pollingInterval, setPollingInterval] = useState(agent.pollingIntervalSeconds || 60);
+  const [connMethod, setConnMethod] = useState<'agent_poll' | 'ssh' | 'winrm'>((agent.connectionMethod as any) || 'agent_poll');
+  const [pollingInterval, setPollingInterval] = useState(agent.pollingIntervalSeconds || 10);
+
+  // Multi-PC modal / edit form state
+  const [isPcModalOpen, setIsPcModalOpen] = useState(false);
+  const [editingPcId, setEditingPcId] = useState<string | null>(null);
+  const [formPcName, setFormPcName] = useState('');
+  const [formPcHost, setFormPcHost] = useState('');
+  const [formPcUser, setFormPcUser] = useState('');
+  const [formPcMethod, setFormPcMethod] = useState<'agent_poll' | 'ssh'>('agent_poll');
+  const [formSshUser, setFormSshUser] = useState('');
+  const [formSshPwd, setFormSshPwd] = useState('');
+  const [formSshKey, setFormSshKey] = useState('');
+  const [pcFormError, setPcFormError] = useState<string | null>(null);
 
   // Ping test state
   const [pingStatus, setPingStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [pingLatency, setPingLatency] = useState<number | null>(null);
+  const [pingError, setPingError] = useState<string | null>(null);
 
   // Install modal state
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
-  const [installStep, setInstallStep] = useState<number>(0);
-  const [isInstalling, setIsInstalling] = useState(false);
+  const [isCheckingAgentStatus, setIsCheckingAgentStatus] = useState(false);
+  const [agentStatusFeedback, setAgentStatusFeedback] = useState<string | null>(null);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [syncOptSuccess, setSyncOptSuccess] = useState(false);
 
@@ -77,7 +103,20 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [autoReloadCountdown, setAutoReloadCountdown] = useState<number | null>(null);
   const terminalLogEndRef = useRef<HTMLDivElement>(null);
 
+  const serverHost = typeof window !== 'undefined' && window.location.host ? window.location.host : `${window.location.hostname || '192.168.1.100'}:3000`;
+  const manualPsCommand = `# Comando de Linha Única para PowerShell (Executar como Administrador no PC do Filho):
+irm http://${serverHost}/api/agent/install.ps1 | iex`;
+
   const githubCliCommand = `bash /opt/control_pc/update_from_github.sh || (cd /opt/control_pc && git fetch origin main && git reset --hard origin/main && npm install --legacy-peer-deps && npm run build && systemctl restart control_pc)`;
+
+  // Sincronizar campos quando o agente ou o PC ativo muda
+  useEffect(() => {
+    setIp(agent.ipAddress);
+    setTargetName(agent.targetMachine);
+    setUsername(agent.targetUser);
+    setPort(agent.port || 5985);
+    setConnMethod((agent.connectionMethod as any) || 'agent_poll');
+  }, [agent]);
 
   // Carregar estado real do repositório
   useEffect(() => {
@@ -103,7 +142,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   useEffect(() => {
     if (autoReloadCountdown === null) return;
     if (autoReloadCountdown <= 0) {
-      window.location.reload();
+      window.location.href = window.location.origin + window.location.pathname + '?updated=' + Date.now();
       return;
     }
     const timer = setTimeout(() => {
@@ -130,7 +169,6 @@ export const AdminTab: React.FC<AdminTabProps> = ({
       '[1/5] A verificar diretório e repositório...',
     ]);
 
-    // Animar os passos visualmente enquanto o processo corre no backend
     const stepTimer1 = setTimeout(() => {
       setGithubStep(2);
       setGithubLogs((prev) => [...prev, '[2/5] A ligar a https://github.com/wsmigas/Control_PC.git (git fetch)...']);
@@ -173,7 +211,6 @@ export const AdminTab: React.FC<AdminTabProps> = ({
           isUpToDate: true,
         }));
         onSyncOptDirectory();
-        // Iniciar recarregamento automático em 5 segundos
         setAutoReloadCountdown(5);
       } else {
         setIsUpdatingGithub(false);
@@ -196,8 +233,36 @@ export const AdminTab: React.FC<AdminTabProps> = ({
     }
   };
 
+  // Teste de Ping
+  const handleTestPing = async () => {
+    setPingStatus('testing');
+    setPingError(null);
+    setPingLatency(null);
 
-  // Handle Save
+    try {
+      const res = await fetch('/api/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip, port: Number(port) }),
+      });
+      const data = await res.json();
+      if (res.ok && data.online) {
+        setPingStatus('success');
+        setPingLatency(data.latency ?? 1);
+        setPingError(null);
+      } else {
+        setPingStatus('failed');
+        setPingLatency(null);
+        setPingError(data.error || `Host ${ip} inalcançável (Sem resposta ICMP Echo ou na porta ${port})`);
+      }
+    } catch (err: any) {
+      setPingStatus('failed');
+      setPingLatency(null);
+      setPingError(`Erro de comunicação com o servidor: ${err.message}`);
+    }
+  };
+
+  // Guardar configuração do PC atual
   const handleSaveNetworkConfig = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateAgentConfig({
@@ -211,45 +276,59 @@ export const AdminTab: React.FC<AdminTabProps> = ({
     setPingStatus('idle');
   };
 
-  // Test Ping to Son's Computer IP
-  const handleTestPing = () => {
-    setPingStatus('testing');
-    setTimeout(() => {
-      // Simulate realistic network probe to configured IP
-      const isValidIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
-      if (isValidIp) {
-        setPingStatus('success');
-        setPingLatency(Math.floor(Math.random() * 8) + 12); // 12-20ms
-      } else {
-        setPingStatus('failed');
-      }
-    }, 1200);
+  // Abrir modal para novo PC
+  const handleOpenNewPcModal = () => {
+    setEditingPcId(null);
+    setFormPcName('');
+    setFormPcHost('');
+    setFormPcUser('');
+    setFormPcMethod('agent_poll');
+    setFormSshUser('admin');
+    setFormSshPwd('');
+    setFormSshKey('');
+    setPcFormError(null);
+    setIsPcModalOpen(true);
   };
 
-  // Run full install process
-  const startRemoteInstallation = () => {
-    setIsInstalling(true);
-    setInstallStep(1);
+  // Abrir modal para editar PC
+  const handleOpenEditPcModal = (pc: PCConfig) => {
+    setEditingPcId(pc.id);
+    setFormPcName(pc.nome);
+    setFormPcHost(pc.host);
+    setFormPcUser(pc.target_user);
+    setFormPcMethod(pc.connectionMethod || 'agent_poll');
+    setFormSshUser(pc.ssh_user || 'admin');
+    setFormSshPwd('');
+    setFormSshKey(pc.ssh_key || '');
+    setPcFormError(null);
+    setIsPcModalOpen(true);
+  };
 
-    setTimeout(() => {
-      setInstallStep(2); // Sending blobs
-      setTimeout(() => {
-        setInstallStep(3); // Hash validation
-        setTimeout(() => {
-          setInstallStep(4); // Scheduled task
-          setTimeout(() => {
-            setInstallStep(5); // Complete!
-            setIsInstalling(false);
-            onUpdateAgentConfig({
-              installationStatus: 'installed',
-              lastSyncTime: 'Agora mesmo',
-              hashVerified: true,
-              processesCount: 4,
-            });
-          }, 1000);
-        }, 1100);
-      }, 1200);
-    }, 1000);
+  // Submeter formulário de PC
+  const handleSubmitPc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formPcName.trim() || !formPcHost.trim() || !formPcUser.trim()) {
+      setPcFormError('Nome, IP/Host e Utilizador do Windows são obrigatórios.');
+      return;
+    }
+
+    if (onSavePc) {
+      try {
+        await onSavePc({
+          id: editingPcId || undefined,
+          nome: formPcName.trim(),
+          host: formPcHost.trim(),
+          target_user: formPcUser.trim(),
+          connectionMethod: formPcMethod,
+          ssh_user: formSshUser.trim(),
+          ssh_password: formSshPwd || undefined,
+          ssh_key: formSshKey.trim(),
+        });
+        setIsPcModalOpen(false);
+      } catch (err: any) {
+        setPcFormError(err.message || 'Erro ao guardar computador');
+      }
+    }
   };
 
   const copyToClipboard = (text: string, id: string) => {
@@ -258,97 +337,185 @@ export const AdminTab: React.FC<AdminTabProps> = ({
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const serverHost = typeof window !== 'undefined' && window.location.host ? window.location.host : `${window.location.hostname || '192.168.1.100'}:3000`;
-  const manualPsCommand = `# Comando de Linha Única para PowerShell (Executar como Administrador no PC do Filho):
-irm http://${serverHost}/api/agent/install.ps1 | iex`;
-
-  const systemdService = `[Unit]
-Description=SentinelPC - Servidor de Controlo Parental
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/control_pc
-ExecStart=/usr/bin/npm run preview -- --port 3000 --host 0.0.0.0
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target`;
-
   return (
     <div className="space-y-6">
-      {/* Page Title & Status Overview */}
+      {/* Page Header */}
       <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <Server className="h-5 w-5 text-cyan-400" />
             <h3 className="text-base font-bold text-white">
-              Administração & Configuração do Agente
+              Administração de Computadores & Sistema
             </h3>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Configure o endereço de rede do computador do seu filho, execute a instalação do agente PowerShell e gira a implantação na pasta <code className="text-cyan-300 font-mono">/opt/control_pc</code>.
+            Gira os computadores monitorizados, configure o protocolo de comunicação mais fiável (Agente HTTP) e mantenha o sistema atualizado.
           </p>
         </div>
 
-        {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-2.5">
-          {onOpenConnectModal && (
-            <button
-              type="button"
-              onClick={onOpenConnectModal}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 transition-colors whitespace-nowrap"
-            >
-              <Activity className="h-4 w-4 text-cyan-400" />
-              <span>Diagnóstico / Ligar em Direto</span>
-            </button>
-          )}
-
-          {onResetAgentData && (
-            <button
-              type="button"
-              onClick={onResetAgentData}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 transition-colors whitespace-nowrap"
-              title="Limpa contadores e repõe o agente a zeros"
-            >
-              <Trash2 className="h-4 w-4 text-rose-400" />
-              <span>Limpar Dados do Agente</span>
-            </button>
-          )}
+          <button
+            onClick={handleOpenNewPcModal}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 transition-colors cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Adicionar Computador</span>
+          </button>
 
           <button
-            onClick={() => {
-              setIsInstallModalOpen(true);
-              setInstallStep(0);
-            }}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-lg shadow-cyan-950 whitespace-nowrap"
+            onClick={() => setIsInstallModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-lg shadow-cyan-950 cursor-pointer"
           >
             <DownloadCloud className="h-4 w-4" />
-            <span>Instalar Agente no PC Alvo</span>
+            <span>Instalar Agente no PC</span>
           </button>
         </div>
       </div>
 
+      {/* Protocol Architecture Insight Banner (Análise Pedida pelo Utilizador) */}
+      <div className="rounded-xl border border-cyan-900/40 bg-gradient-to-r from-cyan-950/30 to-slate-900/60 p-5 space-y-3">
+        <div className="flex items-center gap-2.5 text-cyan-400 font-bold text-sm">
+          <Zap className="h-4 w-4" />
+          <span>Qual a melhor forma de controlar o PC? (Agente Cliente HTTP vs SSH)</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
+          <div className="p-3.5 rounded-lg bg-slate-950/70 border border-slate-800/80 space-y-1.5">
+            <span className="font-semibold text-rose-400 flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5" /> Porque o controlo por SSH falha tanto no Windows:
+            </span>
+            <p className="text-slate-400 leading-relaxed text-[11px]">
+              1. A <strong>Firewall do Windows</strong> bloqueia portas de entrada (22) por omissão.<br/>
+              2. Com <strong>Wi-Fi e DHCP</strong>, o IP do PC do filho muda constantemente.<br/>
+              3. O SSH corre na <strong>Sessão 0 (Serviço)</strong> isolada, não conseguindo ver a janela em primeiro plano nem abrir popups de aviso no ecrã do filho.
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 space-y-1.5">
+            <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> A Solução Mais Fiável: Agente Cliente Nativo (HTTP REST)
+            </span>
+            <p className="text-emerald-200/80 leading-relaxed text-[11px]">
+              1. <strong>Conexão Inversa:</strong> É o PC do filho que contacta o servidor a cada 10s (a Firewall nunca bloqueia ligações de saída).<br/>
+              2. <strong>Resistente a IPs Dinâmicos:</strong> O agente reporta sempre mesmo que o IP mude.<br/>
+              3. <strong>Sessão Gráfica Real:</strong> Monitoriza janelas ativas, inatividade do rato e envia avisos no ecrã instantaneamente.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Multi-PC List Card */}
+      <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <Laptop className="h-5 w-5 text-cyan-400" />
+            <h4 className="text-base font-bold text-white">Computadores Geridos (Multi-PC)</h4>
+          </div>
+          <span className="text-xs text-slate-400 font-mono">
+            {pcsList.length} computador{pcsList.length !== 1 ? 'es' : ''} registado{pcsList.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {pcsList.map((pc) => {
+            const isCurrent = pc.id === activePcId;
+            return (
+              <div
+                key={pc.id}
+                className={`p-4 rounded-xl border transition-all ${
+                  isCurrent
+                    ? 'bg-cyan-950/30 border-cyan-500/50 ring-1 ring-cyan-500/30 shadow-lg shadow-cyan-950/20'
+                    : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${isCurrent ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800 text-slate-400'}`}>
+                      <Laptop className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h5 className="text-sm font-bold text-white">{pc.nome}</h5>
+                      <span className="text-[11px] text-slate-400 font-mono">{pc.host}</span>
+                    </div>
+                  </div>
+
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold ${
+                    pc.isOnline
+                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {pc.isOnline ? 'Online' : 'Offline'}
+                  </span>
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-slate-800/80 space-y-1 text-[11px] text-slate-400 font-mono">
+                  <div>Utilizador: <strong className="text-slate-200">{pc.target_user}</strong></div>
+                  <div>Protocolo: <span className="text-cyan-300">{pc.connectionMethod === 'ssh' ? 'SSH Direto' : 'Agente Cliente HTTP (Recomendado)'}</span></div>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                  {onSelectPc && (
+                    <button
+                      type="button"
+                      disabled={isCurrent}
+                      onClick={() => onSelectPc(pc.id)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                        isCurrent
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 cursor-default'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                      }`}
+                    >
+                      {isCurrent ? 'PC Ativo' : 'Selecionar'}
+                    </button>
+                  )}
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditPcModal(pc)}
+                      className="p-1.5 rounded-md hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                      title="Editar configurações deste PC"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+
+                    {pcsList.length > 1 && onDeletePc && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Remover o computador "${pc.nome}"?`)) {
+                            onDeletePc(pc.id);
+                          }
+                        }}
+                        className="p-1.5 rounded-md hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                        title="Remover computador"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (7 cols): Computer IP & Connection Form */}
+        {/* Left Column (7 cols): Network Form & Ping Probe */}
         <div className="lg:col-span-7 space-y-6">
           <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h4 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Network className="h-4 w-4 text-cyan-400" />
-                Ligação de Rede ao PC do Filho
+                Configurações do PC Ativo ({targetName})
               </h4>
               <span className="text-xs font-mono text-slate-400">
-                Alvo: {agent.targetMachine}
+                Alvo: {targetName}
               </span>
             </div>
 
             <form onSubmit={handleSaveNetworkConfig} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* IP Address Field */}
                 <div>
                   <label className="text-xs font-medium text-slate-300 block mb-1">
                     Endereço IP do Computador
@@ -365,11 +532,10 @@ WantedBy=multi-user.target`;
                     className="w-full px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-cyan-300 font-mono font-semibold focus:outline-hidden focus:border-cyan-500"
                   />
                   <span className="text-[10px] text-slate-500 mt-1 block">
-                    IP estático ou reserva DHCP no router de casa.
+                    IP local no router de casa.
                   </span>
                 </div>
 
-                {/* Hostname */}
                 <div>
                   <label className="text-xs font-medium text-slate-300 block mb-1">
                     Nome da Máquina (Hostname)
@@ -387,7 +553,6 @@ WantedBy=multi-user.target`;
                   </span>
                 </div>
 
-                {/* Windows Username */}
                 <div>
                   <label className="text-xs font-medium text-slate-300 block mb-1">
                     Nome de Utilizador Windows
@@ -398,209 +563,97 @@ WantedBy=multi-user.target`;
                     placeholder="Ex: Tomas ou filho"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white focus:outline-hidden focus:border-cyan-500"
-                  />
-                  <span className="text-[10px] text-slate-500 mt-1 block">
-                    Conta de utilizador a ser monitorizada.
-                  </span>
-                </div>
-
-                {/* Port */}
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">
-                    Porta de Comunicação
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="65535"
-                    value={port}
-                    onChange={(e) => setPort(Number(e.target.value))}
                     className="w-full px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white font-mono focus:outline-hidden focus:border-cyan-500"
                   />
                   <span className="text-[10px] text-slate-500 mt-1 block">
-                    Padrão 5985 (WinRM HTTP) ou 5986 (HTTPS).
+                    Conta exata do Windows a monitorizar.
                   </span>
                 </div>
-              </div>
 
-              {/* Protocol & Polling Interval */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                 <div>
                   <label className="text-xs font-medium text-slate-300 block mb-1">
-                    Método de Ligação
+                    Método de Comunicação
                   </label>
                   <select
                     value={connMethod}
                     onChange={(e) => setConnMethod(e.target.value as any)}
                     className="w-full px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white focus:outline-hidden focus:border-cyan-500"
                   >
-                    <option value="winrm">PowerShell Remoting / WinRM (Recomendado)</option>
-                    <option value="agent_poll">Agente Inverso (Pull / Polling HTTP)</option>
-                    <option value="ssh">OpenSSH Server for Windows</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">
-                    Frequência de Sincronização
-                  </label>
-                  <select
-                    value={pollingInterval}
-                    onChange={(e) => setPollingInterval(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white focus:outline-hidden focus:border-cyan-500"
-                  >
-                    <option value={30}>Cada 30 segundos (Tempo Real)</option>
-                    <option value={60}>Cada 1 minuto (Padrão)</option>
-                    <option value={120}>Cada 2 minutos (Económico)</option>
-                    <option value={300}>Cada 5 minutos</option>
+                    <option value="agent_poll">Agente Cliente HTTP (Recomendado / 100% Fiável)</option>
+                    <option value="ssh">SSH Direto (OpenSSH Windows)</option>
+                    <option value="winrm">PowerShell Remoting / WinRM</option>
                   </select>
                 </div>
               </div>
 
               {/* Ping Connectivity Box */}
-              <div className="rounded-lg bg-slate-950 p-3.5 border border-slate-800 flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-300 font-medium">
-                      Conectividade com {ip}:
-                    </span>
-                    {pingStatus === 'success' && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 font-mono">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Online ({pingLatency}ms)
+              <div className="rounded-lg bg-slate-950 p-3.5 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-300 font-medium">
+                        Conectividade de Rede ({ip}):
                       </span>
-                    )}
-                    {pingStatus === 'failed' && (
-                      <span className="text-xs text-rose-400 font-bold flex items-center gap-1">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Sem resposta no IP
-                      </span>
-                    )}
-                    {pingStatus === 'testing' && (
-                      <span className="text-xs text-cyan-400 animate-pulse font-mono">
-                        A testar pacote ICMP & porta {port}...
-                      </span>
-                    )}
-                    {pingStatus === 'idle' && (
-                      <span className="text-xs text-slate-500">Não testado</span>
-                    )}
+                      {pingStatus === 'success' && (
+                        <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 font-mono">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Online ({pingLatency}ms)
+                        </span>
+                      )}
+                      {pingStatus === 'failed' && (
+                        <span className="text-xs text-rose-400 font-bold flex items-center gap-1">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Offline / Inalcançável
+                        </span>
+                      )}
+                      {pingStatus === 'testing' && (
+                        <span className="text-xs text-cyan-400 animate-pulse font-mono flex items-center gap-1.5">
+                          <Activity className="h-3 w-3 animate-spin" />
+                          A testar ICMP Echo & porta {port}...
+                        </span>
+                      )}
+                      {pingStatus === 'idle' && (
+                        <span className="text-xs text-slate-500">Não testado</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Sonda a rede real através do servidor Linux para testar se o computador está ligado.
+                    </p>
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    Testa se o computador está ligado e acessível na rede local de casa.
-                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleTestPing}
+                    disabled={pingStatus === 'testing'}
+                    className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    Testar Ping
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleTestPing}
-                  disabled={pingStatus === 'testing'}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors shrink-0"
-                >
-                  Testar Ping
-                </button>
+                {pingError && (
+                  <div className="p-2 rounded bg-rose-950/40 border border-rose-500/40 text-[11px] text-rose-300 font-mono flex items-start gap-1.5 animate-in fade-in">
+                    <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />
+                    <span>{pingError}</span>
+                  </div>
+                )}
               </div>
 
               {/* Form Buttons */}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-sm"
+                  className="px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors shadow-sm cursor-pointer"
                 >
-                  Guardar Parâmetros de Rede
+                  Guardar Configuração
                 </button>
               </div>
             </form>
           </div>
-
-          {/* Quick Install Guide Callout */}
-          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-cyan-400" />
-                Comando Rápido para o PowerShell do PC Alvo
-              </h4>
-              <button
-                type="button"
-                onClick={() => copyToClipboard(manualPsCommand, 'manual-cmd')}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200"
-              >
-                {copiedCmd === 'manual-cmd' ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Copiado!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5 text-slate-400" />
-                    <span>Copiar Comando</span>
-                  </>
-                )}
-              </button>
-            </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Em alternativa à instalação remota, pode abrir o PowerShell no computador de {username} como Administrador e colar:
-            </p>
-            <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300/90 overflow-x-auto max-h-36">
-              {manualPsCommand}
-            </pre>
-          </div>
         </div>
 
-        {/* Right Column (5 cols): /opt/control_pc Deployment & Systemd Service */}
+        {/* Right Column (5 cols): GitHub Live Updater & Clean Data */}
         <div className="lg:col-span-5 space-y-6">
-          {/* /opt/control_pc Directory Card */}
-          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <FolderCheck className="h-4 w-4 text-emerald-400" />
-                <h4 className="text-sm font-semibold text-white">
-                  Instalação em /opt/control_pc
-                </h4>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Instalado no disco
-              </span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono space-y-1">
-                <div className="text-slate-400 text-[11px]">Diretoria de Destino:</div>
-                <div className="text-cyan-300 font-bold">/opt/control_pc</div>
-                <div className="text-slate-500 text-[10px] pt-1">
-                  Permissões: root:root (rwxr-xr-x) · Ficheiros da Aplicação Prontos
-                </div>
-              </div>
-
-              <p className="text-slate-400 leading-relaxed text-xs">
-                A aplicação web de controlo parental, os ficheiros estáticos e os scripts de gestão encontram-se provisionados na pasta <code className="text-slate-200 font-mono">/opt/control_pc</code> do seu servidor Linux.
-              </p>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onSyncOptDirectory();
-                  setSyncOptSuccess(true);
-                  setTimeout(() => setSyncOptSuccess(false), 2500);
-                }}
-                className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
-              >
-                {syncOptSuccess ? (
-                  <>
-                    <Check className="h-4 w-4 text-emerald-400" />
-                    <span>Sincronizado com /opt/control_pc com Sucesso!</span>
-                  </>
-                ) : (
-                  <>
-                    <RotateCcw className="h-4 w-4 text-cyan-400" />
-                    <span>Sincronizar Código para /opt/control_pc</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
           {/* GitHub Live Updater Card */}
           <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -610,113 +663,207 @@ WantedBy=multi-user.target`;
                   Atualização via GitHub
                 </h4>
               </div>
-              {githubStatus.isUpToDate === false ? (
-                <span className="text-[11px] text-amber-300 bg-amber-950/80 border border-amber-500/50 px-2 py-0.5 rounded-full font-semibold animate-pulse">
-                  Atualização disponível ({githubStatus.remoteCommit})
-                </span>
-              ) : githubStatus.isUpToDate === true ? (
-                <span className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full font-mono">
-                  Sincronizado ({githubStatus.localCommit})
-                </span>
-              ) : (
-                <span className="text-[11px] text-cyan-400 font-mono">
-                  main branch
-                </span>
-              )}
+              <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-medium ${
+                githubStatus.isUpToDate
+                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-cyan-950 text-cyan-400 border border-cyan-500/30'
+              }`}>
+                {githubStatus.localCommit ? `v:${githubStatus.localCommit}` : 'main branch'}
+              </span>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono space-y-1">
-                <div className="text-slate-400 text-[11px]">Repositório Oficial:</div>
-                <div className="text-cyan-300 font-bold truncate">
-                  https://github.com/wsmigas/Control_PC.git
-                </div>
-                <div className="text-slate-500 text-[10px] pt-1 flex items-center justify-between">
-                  <span>Diretoria: {githubStatus.localCommit ? `/opt/control_pc (${githubStatus.localCommit})` : '/opt/control_pc'}</span>
-                  <span>Branch: main</span>
-                </div>
-              </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Sincroniza o servidor diretamente com o repositório oficial <strong className="text-slate-200 font-mono">wsmigas/Control_PC</strong>.
+            </p>
 
-              <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                <span>Última Sincronização:</span>
-                <span className="text-white font-mono">{lastGithubUpdate}</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={startGithubUpdate}
-                  className="flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black transition-colors shadow-sm cursor-pointer"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Atualizar Site Agora</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(githubCliCommand, 'git-cli')}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
-                >
-                  {copiedCmd === 'git-cli' ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>Copiado!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5 text-slate-400" />
-                      <span>Copiar Comando CLI</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Systemd Service Card */}
-          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                <Zap className="h-4 w-4 text-amber-400" />
-                Serviço Systemd (Arranque Automático)
-              </h4>
+            <div className="space-y-2.5">
               <button
                 type="button"
-                onClick={() => copyToClipboard(systemdService, 'systemd')}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200"
+                onClick={startGithubUpdate}
+                disabled={isUpdatingGithub}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 rounded-lg transition-colors shadow-lg shadow-cyan-950 cursor-pointer"
               >
-                {copiedCmd === 'systemd' ? (
+                {isUpdatingGithub ? (
+                  <>
+                    <Activity className="h-4 w-4 animate-spin" />
+                    <span>A sincronizar e a compilar...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    <span>Atualizar Site Agora</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => copyToClipboard(githubCliCommand, 'git-cli')}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800 text-slate-300 transition-colors cursor-pointer"
+              >
+                {copiedCmd === 'git-cli' ? (
                   <>
                     <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Copiado</span>
+                    <span>Comando CLI Copiado!</span>
                   </>
                 ) : (
                   <>
                     <Copy className="h-3.5 w-3.5 text-slate-400" />
-                    <span>Copiar .service</span>
+                    <span>Copiar Comando de Atualização Manual (Terminal)</span>
                   </>
                 )}
               </button>
             </div>
-
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Para o painel arrancar sempre que o seu servidor Linux ligar, guarde o ficheiro em <code className="text-slate-300 font-mono">/etc/systemd/system/control_pc.service</code>:
-            </p>
-
-            <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-amber-300/90 overflow-x-auto max-h-40 leading-relaxed">
-              {systemdService}
-            </pre>
-
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
-              <div># Comandos de ativação no servidor:</div>
-              <div className="text-cyan-300">systemctl daemon-reload</div>
-              <div className="text-cyan-300">systemctl enable --now control_pc</div>
-            </div>
           </div>
+
+          {/* Clean Agent Data Card */}
+          {onResetAgentData && (
+            <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-4 flex items-center justify-between gap-3">
+              <div>
+                <h5 className="text-xs font-semibold text-white">Repor Contadores a Zero</h5>
+                <p className="text-[11px] text-slate-400">Limpa dados acumulados deste computador.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Limpar todos os contadores e dados deste PC?')) {
+                    onResetAgentData();
+                  }
+                }}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 transition-colors cursor-pointer"
+              >
+                Limpar
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Agent Installation Wizard Modal */}
+      {/* Add / Edit PC Modal */}
+      {isPcModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="relative w-full max-w-lg rounded-xl border border-slate-800 bg-[#0E131F] p-6 shadow-2xl text-slate-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Laptop className="h-5 w-5 text-cyan-400" />
+                <h3 className="text-base font-bold text-white">
+                  {editingPcId ? 'Editar Computador' : 'Adicionar Novo Computador'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPcModalOpen(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitPc} className="space-y-3.5 text-xs">
+              <div>
+                <label className="text-slate-300 font-medium block mb-1">Nome de Identificação</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: PC do Miguel ou Portátil da Maria"
+                  value={formPcName}
+                  onChange={(e) => setFormPcName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-white focus:outline-hidden focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">IP Local / Hostname</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 192.168.1.120"
+                    value={formPcHost}
+                    onChange={(e) => setFormPcHost(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-cyan-300 font-mono focus:outline-hidden focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">Utilizador Windows</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: tomas ou PC\\filho"
+                    value={formPcUser}
+                    onChange={(e) => setFormPcUser(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-white font-mono focus:outline-hidden focus:border-cyan-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-medium block mb-1">Método de Ligação</label>
+                <select
+                  value={formPcMethod}
+                  onChange={(e) => setFormPcMethod(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-white focus:outline-hidden focus:border-cyan-500"
+                >
+                  <option value="agent_poll">Agente Cliente HTTP (Recomendado - 100% Fiável)</option>
+                  <option value="ssh">SSH Remoto (Requer OpenSSH ativo no Windows)</option>
+                </select>
+              </div>
+
+              {formPcMethod === 'ssh' && (
+                <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2 text-[11px]">
+                  <span className="text-cyan-400 font-semibold block">Configurações de Acesso SSH:</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-slate-400">Utilizador SSH:</span>
+                      <input
+                        type="text"
+                        placeholder="admin"
+                        value={formSshUser}
+                        onChange={(e) => setFormSshUser(e.target.value)}
+                        className="w-full mt-1 px-2.5 py-1.5 rounded border border-slate-800 bg-slate-900 text-white"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-slate-400">Palavra-passe:</span>
+                      <input
+                        type="password"
+                        placeholder="opcional se usar chave"
+                        value={formSshPwd}
+                        onChange={(e) => setFormSshPwd(e.target.value)}
+                        className="w-full mt-1 px-2.5 py-1.5 rounded border border-slate-800 bg-slate-900 text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {pcFormError && (
+                <div className="p-2 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs">
+                  {pcFormError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsPcModalOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300"
+                >
+                  Guardar Computador
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Real Windows Agent Installation Modal */}
       {isInstallModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
           <div className="relative w-full max-w-xl rounded-xl border border-slate-800 bg-[#0E131F] p-6 shadow-2xl text-slate-100">
@@ -725,273 +872,153 @@ WantedBy=multi-user.target`;
                 <DownloadCloud className="h-5 w-5 text-cyan-400" />
                 <div>
                   <h3 className="text-base font-bold text-white">
-                    Assistente de Instalação do Agente no PC
+                    Instalação do Agente no PC Windows
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Destino: <strong className="text-white font-mono">{ip}</strong> ({username} @ {targetName})
+                    Computador Alvo: <strong className="text-white font-mono">{targetName}</strong> ({ip})
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsInstallModalOpen(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="mt-5 space-y-5">
-              {/* Stepper progress */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-400">
-                  <span>Passo a Passo de Instalação</span>
-                  <span className="font-mono text-cyan-400">
-                    {installStep === 0 ? 'Pronto' : installStep === 5 ? '100% Concluído' : `Passo ${installStep} de 5`}
-                  </span>
-                </div>
+            <div className="mt-5 space-y-4">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Para ligar o computador de <strong>{username}</strong> sem falhas de rede, execute o comando de linha única abaixo no PowerShell do Windows com permissões de administrador:
+              </p>
 
-                <div className="space-y-2">
-                  {[
-                    { step: 1, title: 'Testar Conexão de Rede e Porta WinRM', desc: `Ping e handshake na porta ${port} do IP ${ip}` },
-                    { step: 2, title: 'Injeção de Blobs Base64 (agente.ps1, vigia.ps1)', desc: 'Fragmentação em linhas de 2000 chars para evitar overflow de stdin' },
-                    { step: 3, title: 'Validação Criptográfica de Integridade SHA-256', desc: 'Verificação com Get-FileHash ($hok = true)' },
-                    { step: 4, title: 'Configuração da Tarefa Agendada Windows (SentinelWatcher)', desc: 'Garante execução oculta e persistente ao iniciar o Windows' },
-                    { step: 5, title: 'Agente Ativo e Sincronizado', desc: 'Telemetria e monitorização de processos iniciada' },
-                  ].map((s) => {
-                    const isDone = installStep > s.step || installStep === 5;
-                    const isCurrent = installStep === s.step && isInstalling;
-                    return (
-                      <div
-                        key={s.step}
-                        className={`p-3 rounded-lg border transition-all flex items-start gap-3 ${
-                          isDone
-                            ? 'bg-emerald-950/20 border-emerald-500/30'
-                            : isCurrent
-                            ? 'bg-cyan-950/30 border-cyan-500/50 ring-1 ring-cyan-500/30'
-                            : 'bg-slate-900/40 border-slate-800/80 opacity-60'
-                        }`}
-                      >
-                        <div className="mt-0.5">
-                          {isDone ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                          ) : isCurrent ? (
-                            <Activity className="h-4 w-4 text-cyan-400 animate-spin shrink-0" />
-                          ) : (
-                            <span className="flex h-4 w-4 rounded-full border border-slate-600 text-[10px] items-center justify-center text-slate-400 font-mono">
-                              {s.step}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex-1">
-                          <h5 className="text-xs font-semibold text-white">
-                            {s.title}
-                          </h5>
-                          <p className="text-[11px] text-slate-400">
-                            {s.desc}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                    <Terminal className="h-4 w-4 text-cyan-400" />
+                    Comando PowerShell de Administrador:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(`irm http://${serverHost}/api/agent/install.ps1 | iex`, 'modal-ps')}
+                    className="hover:text-cyan-300 text-slate-400 text-xs cursor-pointer"
+                  >
+                    {copiedCmd === 'modal-ps' ? 'Copiado!' : 'Copiar'}
+                  </button>
                 </div>
+                <pre className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-cyan-300 select-all overflow-x-auto">
+                  irm http://{serverHost}/api/agent/install.ps1 | iex
+                </pre>
               </div>
 
-              {/* Status summary */}
-              {installStep === 5 && (
-                <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/40 rounded-lg text-xs text-emerald-300 flex items-center gap-2.5">
-                  <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <div>
-                    <strong>Instalação concluída com sucesso!</strong>
-                    <p className="text-[11px] text-emerald-300/80 mt-0.5">
-                      O agente está a correr no computador de {username}. A contagem de tempo e bloqueios já estão operacionais.
-                    </p>
-                  </div>
-                </div>
-              )}
+              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-800 text-xs space-y-2 text-slate-300">
+                <div className="font-semibold text-white">Vantagens deste método cliente:</div>
+                <ul className="list-disc list-inside space-y-1 text-slate-400 text-[11px]">
+                  <li>Não precisa de abrir portas nem configurar OpenSSH no Windows</li>
+                  <li>Resistente a alterações de IP causadas pelo router/DHCP ou Wi-Fi</li>
+                  <li>Monitoriza com precisão o tempo ativo e permite enviar mensagens instantâneas</li>
+                </ul>
+              </div>
             </div>
 
-            {/* Modal Footer */}
-            <div className="mt-6 flex items-center justify-between pt-4 border-t border-slate-800">
+            <div className="mt-6 flex items-center justify-end pt-4 border-t border-slate-800">
               <button
                 type="button"
                 onClick={() => setIsInstallModalOpen(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white"
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
               >
                 Fechar
               </button>
-
-              {installStep !== 5 ? (
-                <button
-                  type="button"
-                  disabled={isInstalling}
-                  onClick={startRemoteInstallation}
-                  className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 rounded-lg transition-colors shadow-sm"
-                >
-                  {isInstalling ? (
-                    <>
-                      <Activity className="h-4 w-4 animate-spin" />
-                      <span>A Instalar no PC...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="h-4 w-4" />
-                      <span>Iniciar Instalação Remota</span>
-                    </>
-                  )}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsInstallModalOpen(false)}
-                  className="px-5 py-2 text-xs font-semibold text-black bg-emerald-400 hover:bg-emerald-300 rounded-lg"
-                >
-                  Concluído
-                </button>
-              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* GitHub Update Modal */}
+      {/* GitHub Update Live Modal with Terminal Output */}
       {isGithubModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-          <div className="relative w-full max-w-xl rounded-xl border border-slate-800 bg-[#0E131F] p-6 shadow-2xl text-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="relative w-full max-w-2xl rounded-xl border border-slate-800 bg-[#0E131F] p-6 shadow-2xl text-slate-100">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <div className="flex items-center gap-2.5">
                 <GitBranch className="h-5 w-5 text-cyan-400" />
                 <div>
                   <h3 className="text-base font-bold text-white">
-                    Atualização do Painel via GitHub
+                    Atualização via GitHub
                   </h3>
                   <p className="text-xs text-slate-400 font-mono">
-                    https://github.com/wsmigas/Control_PC.git (main)
+                    https://github.com/wsmigas/Control_PC.git (branch main)
                   </p>
                 </div>
               </div>
               <button
                 type="button"
+                disabled={isUpdatingGithub}
                 onClick={() => setIsGithubModalOpen(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white disabled:opacity-30 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="mt-5 space-y-5">
-              {/* Stepper */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-400">
-                  <span>Sequência de Atualização</span>
-                  <span className="font-mono text-cyan-400">
-                    {githubStep === 0 ? 'A preparar' : githubStep === 5 ? '100% Concluído' : `Passo ${githubStep} de 5`}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {[
-                    { step: 1, title: 'Conectar ao GitHub', desc: 'Validar conexão com github.com/wsmigas/Control_PC.git' },
-                    { step: 2, title: 'Obter Últimos Commits (git pull origin main)', desc: 'Sincronizar ficheiros na pasta /opt/control_pc' },
-                    { step: 3, title: 'Instalar Dependências (npm install --legacy-peer-deps)', desc: 'Forçar --legacy-peer-deps para evitar conflitos de dependências' },
-                    { step: 4, title: 'Compilar Produção (npm run build)', desc: 'Gerar novos bundles otimizados na pasta dist/' },
-                    { step: 5, title: 'Recarregar Serviço (systemctl restart control_pc)', desc: 'Reiniciar o processo sem perda de dados' },
-                  ].map((s) => {
-                    const isDone = githubStep > s.step || githubStep === 5;
-                    const isCurrent = githubStep === s.step && isUpdatingGithub;
-                    return (
-                      <div
-                        key={s.step}
-                        className={`p-3 rounded-lg border transition-all flex items-start gap-3 ${
-                          isDone
-                            ? 'bg-emerald-950/20 border-emerald-500/30'
-                            : isCurrent
-                            ? 'bg-cyan-950/30 border-cyan-500/50 ring-1 ring-cyan-500/30'
-                            : 'bg-slate-900/40 border-slate-800/80 opacity-60'
-                        }`}
-                      >
-                        <div className="mt-0.5">
-                          {isDone ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                          ) : isCurrent ? (
-                            <Activity className="h-4 w-4 text-cyan-400 animate-spin shrink-0" />
-                          ) : (
-                            <span className="flex h-4 w-4 rounded-full border border-slate-600 text-[10px] items-center justify-center text-slate-400 font-mono">
-                              {s.step}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex-1">
-                          <h5 className="text-xs font-semibold text-white">
-                            {s.title}
-                          </h5>
-                          <p className="text-[11px] text-slate-400">
-                            {s.desc}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            <div className="mt-5 space-y-4">
+              {/* Stepper Indicator */}
+              <div className="grid grid-cols-5 gap-2">
+                {[
+                  { s: 1, label: 'Diretório' },
+                  { s: 2, label: 'Git Sync' },
+                  { s: 3, label: 'Deps' },
+                  { s: 4, label: 'Build' },
+                  { s: 5, label: 'Ativo' },
+                ].map((step) => {
+                  const isDone = githubStep > step.s || (githubStep === 5 && !githubError);
+                  const isCurr = githubStep === step.s && isUpdatingGithub;
+                  return (
+                    <div
+                      key={step.s}
+                      className={`text-center py-1.5 px-1 rounded border text-[11px] font-mono transition-colors ${
+                        isDone
+                          ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300'
+                          : isCurr
+                          ? 'bg-cyan-950/60 border-cyan-500/60 text-cyan-300 ring-1 ring-cyan-500/40'
+                          : 'bg-slate-900 border-slate-800 text-slate-500'
+                      }`}
+                    >
+                      {step.s}. {step.label}
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Real Terminal Log Output */}
+              {/* Terminal Log Output */}
               <div className="rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-hidden shadow-inner">
-                <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400">
-                  <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between px-3.5 py-2 bg-slate-900/80 border-b border-slate-800 text-[10px] text-slate-400">
+                  <span className="flex items-center gap-1.5 font-bold text-slate-300">
                     <Terminal className="h-3.5 w-3.5 text-cyan-400" />
-                    <span className="font-semibold text-slate-200">Terminal de Atualização</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(githubLogs.join('\n'), 'git-logs')}
-                    className="hover:text-cyan-300 text-slate-400 cursor-pointer"
-                  >
-                    {copiedCmd === 'git-logs' ? 'Logs Copiados!' : 'Copiar Logs'}
-                  </button>
+                    Consola de Atualização
+                  </span>
+                  <span>{isUpdatingGithub ? 'A executar...' : 'Concluído'}</span>
                 </div>
-                <div className="p-3 max-h-48 overflow-y-auto space-y-1 scrollbar-thin">
-                  {githubLogs.map((log, idx) => {
-                    const isError = log.includes('[ERRO') || log.includes('error:') || log.includes('[FALHA') || log.includes('[STDERR');
-                    const isSuccess = log.includes('[✓]') || log.includes('sucesso') || log.includes('Success');
-                    const isStep = log.startsWith('[');
-                    return (
-                      <div
-                        key={idx}
-                        className={
-                          isError
-                            ? 'text-rose-400 font-semibold'
-                            : isSuccess
-                            ? 'text-emerald-400 font-semibold'
-                            : isStep
-                            ? 'text-cyan-300'
-                            : 'text-slate-300'
-                        }
-                      >
-                        {log}
-                      </div>
-                    );
-                  })}
+                <div className="p-3.5 max-h-56 overflow-y-auto space-y-1 select-text scrollbar-thin">
+                  {githubLogs.map((log, i) => (
+                    <div
+                      key={i}
+                      className={
+                        log.startsWith('[✓]') || log.includes('Sucesso')
+                          ? 'text-emerald-400 font-semibold'
+                          : log.startsWith('[ERRO]') || log.startsWith('[FALHA]') || log.startsWith('[STDERR]')
+                          ? 'text-rose-400'
+                          : log.startsWith('$')
+                          ? 'text-cyan-400 font-bold'
+                          : 'text-slate-300'
+                      }
+                    >
+                      {log}
+                    </div>
+                  ))}
                   <div ref={terminalLogEndRef} />
                 </div>
               </div>
-
-              {/* Error Banner */}
-              {githubError && (
-                <div className="p-3.5 bg-rose-950/60 border border-rose-500/50 rounded-lg text-xs text-rose-200 space-y-1.5 animate-in fade-in">
-                  <div className="flex items-center gap-2 font-bold text-rose-300">
-                    <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
-                    <span>Falha na Atualização</span>
-                  </div>
-                  <p className="text-[11px] text-rose-200/90 font-mono break-all">{githubError}</p>
-                  <p className="text-[11px] text-slate-300 pt-1">
-                    Dica: Pode executar diretamente no terminal do servidor com o comando:{' '}
-                    <code className="text-cyan-300 bg-slate-900 px-1 py-0.5 rounded font-mono">
-                      bash /opt/control_pc/update_from_github.sh
-                    </code>
-                  </p>
-                </div>
-              )}
 
               {/* Success Banner */}
               {githubStep === 5 && !githubError && (
@@ -1012,7 +1039,7 @@ WantedBy=multi-user.target`;
                       </span>
                       <button
                         type="button"
-                        onClick={() => window.location.reload()}
+                        onClick={() => { window.location.href = window.location.origin + window.location.pathname + '?updated=' + Date.now(); }}
                         className="px-2.5 py-1 bg-emerald-400 text-black font-bold rounded text-xs hover:bg-emerald-300 transition-colors cursor-pointer"
                       >
                         Recarregar Agora (F5)
@@ -1023,7 +1050,6 @@ WantedBy=multi-user.target`;
               )}
             </div>
 
-            {/* Modal Footer */}
             <div className="mt-6 flex items-center justify-between pt-4 border-t border-slate-800">
               <button
                 type="button"
@@ -1046,7 +1072,7 @@ WantedBy=multi-user.target`;
                 ) : githubStep === 5 ? (
                   <button
                     type="button"
-                    onClick={() => window.location.reload()}
+                    onClick={() => { window.location.href = window.location.origin + window.location.pathname + '?updated=' + Date.now(); }}
                     className="flex items-center gap-2 px-5 py-2 text-xs font-bold text-black bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer shadow-sm"
                   >
                     <RefreshCw className="h-3.5 w-3.5" />
@@ -1062,12 +1088,12 @@ WantedBy=multi-user.target`;
                     {isUpdatingGithub ? (
                       <>
                         <Activity className="h-4 w-4 animate-spin" />
-                        <span>A Atualizar...</span>
+                        <span>A Processar...</span>
                       </>
                     ) : (
                       <>
-                        <RefreshCw className="h-3.5 w-3.5" />
-                        <span>Executar Atualização</span>
+                        <Play className="h-4 w-4" />
+                        <span>Iniciar Atualização</span>
                       </>
                     )}
                   </button>

@@ -8,7 +8,9 @@ import {
   Shield,
   ShieldAlert,
   FileCode,
-  ExternalLink
+  ExternalLink,
+  Sparkles,
+  Layers
 } from 'lucide-react';
 import { BlockedDomain } from '../types';
 import { generateHostsBlock } from '../data/mockData';
@@ -17,7 +19,7 @@ interface WebFilterTabProps {
   domains: BlockedDomain[];
   onToggleDomain: (domainId: string) => void;
   onDeleteDomain: (domainId: string) => void;
-  onAddDomain: (domain: string, category: string) => void;
+  onAddDomain: (domain: string, category: string, isWildcard?: boolean) => void;
 }
 
 export const WebFilterTab: React.FC<WebFilterTabProps> = ({
@@ -28,7 +30,20 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
 }) => {
   const [newDomain, setNewDomain] = useState('');
   const [newCategory, setNewCategory] = useState('Redes Sociais');
+  const [includeWildcard, setIncludeWildcard] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const YT_PRESET = [
+    '*.youtube.com',
+    'm.youtube.com',
+    'music.youtube.com',
+    'studio.youtube.com',
+    'youtu.be',
+    'youtube-nocookie.com',
+    'youtubei.googleapis.com',
+    '*.ytimg.com',
+    '*.googlevideo.com',
+  ];
 
   const hostsBlock = generateHostsBlock(domains);
 
@@ -36,15 +51,28 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
     e.preventDefault();
     if (!newDomain.trim()) return;
 
-    // Clean up domain (remove https://, http://, www.)
-    const clean = newDomain
+    let clean = newDomain
       .trim()
       .replace(/^https?:\/\//i, '')
-      .replace(/^www\./i, '')
-      .split('/')[0];
+      .split('/')[0]
+      .split('?')[0];
 
-    onAddDomain(clean, newCategory);
+    const isWild = includeWildcard || clean.startsWith('*.');
+    if (isWild && !clean.startsWith('*.')) {
+      clean = `*.${clean.replace(/^www\./i, '')}`;
+    }
+
+    onAddDomain(clean, newCategory, isWild);
     setNewDomain('');
+    setIncludeWildcard(false);
+  };
+
+  const handleAddPresetYoutube = () => {
+    YT_PRESET.forEach((dom) => {
+      if (!domains.some((d) => d.domain === dom)) {
+        onAddDomain(dom, 'Vídeo & Streaming', dom.startsWith('*.'));
+      }
+    });
   };
 
   const handleCopyHosts = () => {
@@ -67,7 +95,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
           </p>
         </div>
         <div className="p-4 rounded-xl border border-slate-800 bg-[#0E131F]">
-          <span className="text-xs text-slate-400">Bloqueios Ativos no Hosts</span>
+          <span className="text-xs text-slate-400">Bloqueios Ativos no Hosts & DNS</span>
           <p className="font-mono text-xl font-bold text-cyan-400 tabular-nums mt-0.5">
             {activeCount}
           </p>
@@ -84,36 +112,60 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
         {/* Left Column (7 cols): Domain List & Add Form */}
         <div className="lg:col-span-7 space-y-4">
           {/* Add form */}
-          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-              Adicionar Domínio à Lista de Bloqueio
-            </h4>
-            <form onSubmit={handleAdd} className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                placeholder="Ex: roblox.com, tiktok.com, discord.com"
-                value={newDomain}
-                onChange={(e) => setNewDomain(e.target.value)}
-                className="flex-1 px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white placeholder:text-slate-600 focus:outline-hidden focus:border-cyan-500 font-mono"
-              />
-              <select
-                value={newCategory}
-                onChange={(e) => setNewCategory(e.target.value)}
-                className="px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-slate-300 focus:outline-hidden focus:border-cyan-500"
-              >
-                <option value="Redes Sociais">Redes Sociais</option>
-                <option value="Jogos / Servidores">Jogos / Servidores</option>
-                <option value="Apostas / Azar">Apostas / Azar</option>
-                <option value="Conteúdo Adulto">Conteúdo Adulto</option>
-                <option value="Outros">Outros</option>
-              </select>
+          <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Bloquear Sites no PC Dele
+              </h4>
               <button
-                type="submit"
-                className="px-4 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+                type="button"
+                onClick={handleAddPresetYoutube}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-red-950/60 hover:bg-red-900 border border-red-500/40 text-red-300 transition-colors cursor-pointer"
               >
-                <Plus className="h-4 w-4" />
-                <span>Bloquear</span>
+                <Sparkles className="h-3 w-3" />
+                <span>+ Todos os Endereços do YouTube</span>
               </button>
+            </div>
+
+            <form onSubmit={handleAdd} className="space-y-2.5">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Ex: youtube.com, tiktok.com, roblox.com"
+                  value={newDomain}
+                  onChange={(e) => setNewDomain(e.target.value)}
+                  className="flex-1 px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-white placeholder:text-slate-600 focus:outline-hidden focus:border-cyan-500 font-mono"
+                />
+                <select
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  className="px-3 py-2 text-xs rounded-lg border border-slate-800 bg-slate-900 text-slate-300 focus:outline-hidden focus:border-cyan-500 cursor-pointer"
+                >
+                  <option value="Redes Sociais">Redes Sociais</option>
+                  <option value="Vídeo & Streaming">Vídeo & Streaming</option>
+                  <option value="Jogos / Servidores">Jogos / Servidores</option>
+                  <option value="Apostas / Azar">Apostas / Azar</option>
+                  <option value="Conteúdo Adulto">Conteúdo Adulto</option>
+                  <option value="Outros">Outros</option>
+                </select>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-semibold text-black bg-cyan-400 hover:bg-cyan-300 rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Bloquear</span>
+                </button>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={includeWildcard}
+                  onChange={(e) => setIncludeWildcard(e.target.checked)}
+                  className="rounded border-slate-700 bg-slate-900 text-cyan-500"
+                />
+                <span>Incluir também todos os subdomínios (ex: <code>*.youtube.com</code> via regra NRPT DNS)</span>
+              </label>
             </form>
           </div>
 
@@ -124,7 +176,6 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
                 <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-semibold uppercase tracking-wider">
                   <th className="py-3 px-4">Domínio</th>
                   <th className="py-3 px-4">Categoria</th>
-                  <th className="py-3 px-4">Tentativas</th>
                   <th className="py-3 px-4">Estado</th>
                   <th className="py-3 px-4 text-right">Ação</th>
                 </tr>
@@ -132,20 +183,22 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
               <tbody className="divide-y divide-slate-800/60">
                 {domains.map((d) => (
                   <tr key={d.id} className="hover:bg-slate-900/40 transition-colors">
-                    <td className="py-3 px-4 font-mono font-medium text-white">
-                      {d.domain}
+                    <td className="py-3 px-4 font-mono font-medium text-white flex items-center gap-1.5">
+                      <span>{d.domain}</span>
+                      {d.domain.startsWith('*.') && (
+                        <span className="text-[10px] bg-cyan-950 border border-cyan-500/30 text-cyan-400 px-1.5 py-0.5 rounded font-sans">
+                          todos os subdomínios
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-slate-400">
                       {d.category}
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-slate-300">
-                      {d.hitsToday}
                     </td>
                     <td className="py-3 px-4">
                       <button
                         type="button"
                         onClick={() => onToggleDomain(d.id)}
-                        className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors ${
+                        className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors cursor-pointer ${
                           d.active
                             ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
                             : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
@@ -158,7 +211,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteDomain(d.id)}
-                        className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                        className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
                         title="Remover regra"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -177,7 +230,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
             <div>
               <h4 className="text-base font-semibold text-white flex items-center gap-2">
                 <FileCode className="h-4 w-4 text-cyan-400" />
-                Ficheiro Hosts do Windows
+                Ficheiro Hosts & DNS do Windows
               </h4>
               <p className="text-xs text-slate-400">
                 Injetado em <code className="text-slate-300">C:\Windows\System32\drivers\etc\hosts</code>
@@ -185,7 +238,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
             </div>
             <button
               onClick={handleCopyHosts}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700 cursor-pointer"
             >
               {copied ? (
                 <>
@@ -202,17 +255,16 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
           </div>
 
           <p className="text-xs text-slate-400 leading-relaxed">
-            No patch <code className="text-slate-300 font-mono">painel_pc.py</code>, a função <code className="text-slate-300 font-mono">script_hosts(bloco, wild)</code> envia estes registos fragmentados através de <code className="text-slate-300 font-mono">blob("bB", bloco)</code> para contornar limitações de tamanho de linha do PowerShell:
+            O agente Windows injeta estes registos para <code className="text-slate-300 font-mono">0.0.0.0</code> e, para domínios com subdomínios (<code className="text-slate-300 font-mono">*.</code>), aplica regras NRPT no cliente de DNS nativo do Windows:
           </p>
 
-          {/* Code preview */}
-          <pre className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300/90 overflow-x-auto max-h-72 leading-relaxed">
+          <pre className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300/90 overflow-x-auto max-h-72 leading-relaxed select-all">
             {hostsBlock}
           </pre>
 
           <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <span className="font-semibold text-slate-300 block">Vantagem do Bloqueio por Hosts:</span>
-            O redirecionamento para <code className="text-slate-200">0.0.0.0</code> opera a nível de sistema operacional (Kernel/Winsock), bloqueando os domínios em todos os navegadores (Chrome, Edge, Firefox), jogos e aplicações desktop, sem possibilidade de desativação por extensões.
+            <span className="font-semibold text-slate-300 block">Como funciona o bloqueio:</span>
+            O redirecionamento para 0.0.0.0 funciona em todos os browsers (Chrome, Edge, Firefox) e aplicações desktop. Mesmo que o filho mude o DNS ou navegue em modo incógnito, o bloqueio mantém-se inviolável.
           </div>
         </div>
       </div>

@@ -189,62 +189,6 @@ export default function App() {
     showToast(`Adicionados +${mins} minutos de bónus ao dia de hoje!`, 'success');
   };
 
-  const handleSimulateAppUsage = (appId: string, minutes: number) => {
-    let triggeredCutoff = false;
-    let targetName = '';
-
-    setApps((prev) =>
-      prev.map((app) => {
-        if (app.id === appId) {
-          targetName = app.displayName;
-          const updated = app.minutesToday + minutes;
-          const isOver = app.dailyLimitMinutes !== null && updated >= app.dailyLimitMinutes;
-          if (isOver && app.status !== 'blocked') {
-            triggeredCutoff = true;
-          }
-          return {
-            ...app,
-            minutesToday: updated,
-            status: isOver ? 'blocked' : 'running',
-            lastActiveTime: 'Agora mesmo',
-          };
-        }
-        return app;
-      })
-    );
-
-    // Update hourly activity for hour 19 (current peak hour)
-    setHourlyActivity((prev) =>
-      prev.map((h) => {
-        if (h.hour === 19) {
-          const app = apps.find((a) => a.id === appId);
-          const cat = app?.category ?? 'games';
-          return {
-            ...h,
-            [cat === 'games' ? 'games' : cat === 'social' ? 'social' : cat === 'study' ? 'study' : 'browsing']:
-              (h[cat === 'games' ? 'games' : cat === 'social' ? 'social' : cat === 'study' ? 'study' : 'browsing'] || 0) + minutes,
-          };
-        }
-        return h;
-      })
-    );
-
-    const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    if (triggeredCutoff) {
-      const newLog: SystemLogEntry = {
-        id: `log-${Date.now()}`,
-        timestamp: now,
-        type: 'alert',
-        message: `Limite diário esgotado para ${targetName}. Processo bloqueado automaticamente por vigia.ps1.`,
-        source: 'vigia.ps1',
-      };
-      setLogs((prev) => [newLog, ...prev.slice(0, 9)]);
-      showToast(`Limite atingido para ${targetName}! Processo bloqueado pelo agente.`, 'alert');
-    } else {
-      showToast(`+${minutes}m simulados em ${targetName}. Contadores atualizados.`, 'info');
-    }
-  };
-
   const handleKillProcess = (appId: string) => {
     let killedName = '';
     setApps((prev) =>
@@ -443,29 +387,6 @@ export default function App() {
     showToast('Sondagem efetuada com sucesso.', 'info');
   };
 
-  const handleTriggerTestReport = async () => {
-    try {
-      const res = await fetch('/api/test-report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          activeProcess: 'chrome.exe',
-          activeTitle: 'Google Chrome - YouTube & Pesquisa',
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setIsRealMode(true);
-        if (data.state.apps) setApps(data.state.apps);
-        if (data.state.agent) setAgent((prev) => ({ ...prev, ...data.state.agent }));
-        showToast('Relatório de telemetria recebido! Modo em tempo real ativo.', 'success');
-      }
-    } catch {
-      setIsRealMode(true);
-      showToast('Modo em tempo real simulado ativado.', 'success');
-    }
-  };
-
   const handleResetAgentData = async () => {
     try {
       const res = await fetch('/api/reset', { method: 'POST' });
@@ -579,7 +500,6 @@ export default function App() {
             onEditApp={setEditingApp}
             onToggleBlockApp={handleToggleBlockApp}
             onAddBonusMinutes={handleAddBonusMinutes}
-            onSimulateAppUsage={handleSimulateAppUsage}
           />
         )}
 
@@ -589,7 +509,6 @@ export default function App() {
             onEditApp={setEditingApp}
             onToggleBlockApp={handleToggleBlockApp}
             onKillProcess={handleKillProcess}
-            onSimulateAppUsage={handleSimulateAppUsage}
             onAddCustomApp={handleAddCustomApp}
           />
         )}
@@ -640,7 +559,6 @@ export default function App() {
         agent={agent}
         isRealMode={isRealMode}
         onProbeAgent={handleProbeAgent}
-        onTriggerTestReport={handleTriggerTestReport}
         onResetAgentData={handleResetAgentData}
       />
 

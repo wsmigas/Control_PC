@@ -2,14 +2,22 @@
 # ================================================================
 # SentinelPC / Control_PC - Script de Atualizacao via GitHub
 # Repositorio: https://github.com/wsmigas/Control_PC.git
-# Diretoria:   /opt/control_pc
+# Diretoria:   Auto-detetada ou /opt/control_pc
 # ================================================================
 
 set -e
 
-TARGET_DIR="/opt/control_pc"
-if [ ! -d "$TARGET_DIR" ]; then
+# 1. Determinar diretório do projeto
+if [ -n "$1" ] && [ -d "$1" ]; then
+    TARGET_DIR="$1"
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/package.json" ]; then
     TARGET_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+elif [ -f "$PWD/package.json" ]; then
+    TARGET_DIR="$PWD"
+elif [ -d "/opt/control_pc" ]; then
+    TARGET_DIR="/opt/control_pc"
+else
+    TARGET_DIR="$(pwd)"
 fi
 
 echo "[1/5] A aceder ao diretório da aplicação ($TARGET_DIR)..."
@@ -34,12 +42,12 @@ fi
 # Descartar alterações de ficheiros locais temporários para evitar conflitos de merge
 git stash --include-untracked 2>/dev/null || true
 
-# Obter commits mais recentes
+# Obter commits mais recentes da branch main
 echo "       [+] A descarregar commits da branch main..."
-git fetch --depth=10 origin main 2>/dev/null || git fetch origin main || git fetch origin master
+git fetch origin main 2>/dev/null || git fetch --depth=10 origin main 2>/dev/null || git fetch origin master 2>/dev/null || git fetch --all 2>/dev/null
 
 # Forçar atualização limpa para a versão mais recente do GitHub
-git reset --hard FETCH_HEAD 2>/dev/null || git reset --hard origin/main 2>/dev/null || git checkout -B main origin/main
+git reset --hard FETCH_HEAD 2>/dev/null || git reset --hard origin/main 2>/dev/null || git reset --hard origin/master 2>/dev/null || git checkout -B main origin/main
 
 CURRENT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "latest")
 echo "       [✓] Sincronizado com sucesso no commit: $CURRENT_COMMIT"
@@ -66,13 +74,13 @@ echo "{\"lastUpdated\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"commit\":\"$CURREN
 echo "[5/5] A verificar e reiniciar serviço de background..."
 if command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet control_pc; then
-        systemctl restart control_pc
-        echo "       [✓] Serviço systemd 'control_pc' reiniciado com sucesso!"
+        echo "       [✓] A agendar reinício do serviço systemd 'control_pc' em 2 segundos..."
+        (sleep 2 && systemctl restart control_pc 2>/dev/null) &
     elif systemctl is-active --quiet sentinel_pc; then
-        systemctl restart sentinel_pc
-        echo "       [✓] Serviço systemd 'sentinel_pc' reiniciado com sucesso!"
+        echo "       [✓] A agendar reinício do serviço systemd 'sentinel_pc' em 2 segundos..."
+        (sleep 2 && systemctl restart sentinel_pc 2>/dev/null) &
     else
-        echo "       [i] Serviço systemd não ativo. O servidor em execução direta atualizará no próximo ciclo."
+        echo "       [i] Serviço systemd não ativo. O servidor em execução direta servirá os novos ficheiros compilados em dist/."
     fi
 else
     echo "       [i] Sistema em execução direta (sem systemctl). Ficheiros compilados em dist/ atualizados."

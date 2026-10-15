@@ -11,7 +11,11 @@ import {
   AlertTriangle,
   Flame,
   CheckCircle2,
-  Laptop
+  Laptop,
+  Cpu,
+  HardDrive,
+  Thermometer,
+  Activity
 } from 'lucide-react';
 import {
   AppUsageRecord,
@@ -31,7 +35,6 @@ interface OverviewTabProps {
   onEditApp: (app: AppUsageRecord) => void;
   onToggleBlockApp: (appId: string) => void;
   onAddBonusMinutes: (mins: number) => void;
-  onSimulateAppUsage: (appId: string, minutes: number) => void;
 }
 
 export const OverviewTab: React.FC<OverviewTabProps> = ({
@@ -44,7 +47,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   onEditApp,
   onToggleBlockApp,
   onAddBonusMinutes,
-  onSimulateAppUsage,
 }) => {
   const [selectedHour, setSelectedHour] = useState<number | null>(19);
 
@@ -72,7 +74,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Target Computer Header & Simulation Bar */}
+      {/* Target Computer Header */}
       <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-4 sm:p-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 border border-slate-700 text-cyan-400">
@@ -373,6 +375,121 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
         )}
       </div>
+
+        {/* Hardware & System Status Card (Matching Python model /api/estado) */}
+        {(() => {
+          const hw = agent.hardware || {
+            cpuPercent: 14,
+            totalRamMb: 16384,
+            freeRamMb: 8192,
+            diskTotalGb: 476,
+            diskFreeGb: 194,
+            uptimeSeconds: 7200,
+            tempMedia: 42,
+          };
+          const usedRamMb = Math.max(0, hw.totalRamMb - hw.freeRamMb);
+          const ramPercent = Math.min(100, Math.round((usedRamMb / (hw.totalRamMb || 1)) * 100));
+          const usedDiskGb = Math.max(0, hw.diskTotalGb - hw.diskFreeGb);
+          const diskPercent = Math.min(100, Math.round((usedDiskGb / (hw.diskTotalGb || 1)) * 100));
+          const uptimeHours = Math.floor(hw.uptimeSeconds / 3600);
+          const uptimeMins = Math.floor((hw.uptimeSeconds % 3600) / 60);
+
+          return (
+            <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-cyan-400" />
+                  <h3 className="text-base font-semibold text-white">
+                    Recursos & Estado do Computador ({agent.targetMachine})
+                  </h3>
+                </div>
+                <span className="text-xs font-mono text-slate-400">
+                  Uptime: {uptimeHours}h {uptimeMins}m
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                {/* CPU */}
+                <div className="p-3.5 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Cpu className="h-4 w-4 text-cyan-400" /> Carga do Processador
+                    </span>
+                    <span className="font-mono font-bold text-white tabular-nums">{hw.cpuPercent}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        hw.cpuPercent > 80 ? 'bg-rose-500' : hw.cpuPercent > 50 ? 'bg-amber-400' : 'bg-cyan-400'
+                      }`}
+                      style={{ width: `${Math.min(100, hw.cpuPercent)}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-500 block">Intel/AMD Core</span>
+                </div>
+
+                {/* RAM */}
+                <div className="p-3.5 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Activity className="h-4 w-4 text-purple-400" /> Memória RAM
+                    </span>
+                    <span className="font-mono font-bold text-white tabular-nums">{ramPercent}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        ramPercent > 85 ? 'bg-rose-500' : 'bg-purple-400'
+                      }`}
+                      style={{ width: `${ramPercent}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {(usedRamMb / 1024).toFixed(1)} GB usados de {(hw.totalRamMb / 1024).toFixed(1)} GB
+                  </span>
+                </div>
+
+                {/* Disk C: */}
+                <div className="p-3.5 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <HardDrive className="h-4 w-4 text-emerald-400" /> Disco C: (SSD/HD)
+                    </span>
+                    <span className="font-mono font-bold text-white tabular-nums">{diskPercent}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-400 transition-all duration-500"
+                      style={{ width: `${diskPercent}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {Math.round(hw.diskFreeGb)} GB livres de {Math.round(hw.diskTotalGb)} GB
+                  </span>
+                </div>
+
+                {/* Temp */}
+                <div className="p-3.5 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Thermometer className="h-4 w-4 text-amber-400" /> Temperatura
+                    </span>
+                    <span className="font-mono font-bold text-white tabular-nums">
+                      {hw.tempMedia !== null ? `≈ ${hw.tempMedia}°C` : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-500"
+                      style={{ width: `${hw.tempMedia ? Math.min(100, (hw.tempMedia / 90) * 100) : 40}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-500 block">Zonas térmicas ACPI</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* Two Column Section: Top Applications & Live Agent Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
