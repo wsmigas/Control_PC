@@ -10,7 +10,7 @@
     "osVersion": "Windows 11",
     "version": "2.4.2-blobs",
     "processesCount": 0,
-    "taskStatus": "À espera de relatórios do agente...",
+    "taskStatus": "Offline (Desconectado / À espera do agente)",
     "sha256Hash": "9a7e3b18c6e245a498263158f9104b901a82e75306e00b65cf5480e6113b2c1f",
     "hashVerified": true,
     "lastSyncTime": "Nunca",
@@ -19,7 +19,31 @@
     "installationStatus": "installed",
     "optInstallPath": "/opt/control_pc"
   },
-  "apps": [],
+  "apps": [
+    {
+      "id": "app-calculatorapp",
+      "processName": "CalculatorApp.exe",
+      "displayName": "CalculatorApp",
+      "iconType": "box",
+      "category": "system",
+      "minutesToday": 0,
+      "dailyLimitMinutes": 45,
+      "status": "blocked",
+      "windowTitle": "",
+      "lastActiveTime": "Agora mesmo",
+      "isRestricted": true,
+      "allowedDays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "isBlocked": true
+    }
+  ],
   "hourlyActivity": [
     {
       "hour": 8,
@@ -242,6 +266,13 @@
   ],
   "logs": [
     {
+      "id": "log-1792140141357",
+      "timestamp": "08:42:21",
+      "type": "alert",
+      "message": "Aplicação \"CalculatorApp\" (CalculatorApp.exe) bloqueada pelo utilizador.",
+      "source": "dashboard"
+    },
+    {
       "id": "log-1792059602178",
       "timestamp": "10:20:02",
       "type": "info",
@@ -309,7 +340,14 @@
   },
   "ativo": "pc1",
   "pendingActions": {
-    "pc1": []
+    "pc1": [
+      {
+        "id": "act-1792140141357-0.4560776004555951",
+        "type": "killall",
+        "name": "CalculatorApp.exe",
+        "timestamp": 1792140141357
+      }
+    ]
   },
   "runningProcesses": {
     "pc1": []

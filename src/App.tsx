@@ -208,12 +208,14 @@ export default function App() {
     showToast(`Adicionados +${mins} minutos de bónus ao dia de hoje!`, 'success');
   };
 
-  const handleKillProcess = (appId: string) => {
+  const handleKillProcess = async (appId: string) => {
     let killedName = '';
+    let procName = '';
     setApps((prev) =>
       prev.map((app) => {
         if (app.id === appId) {
           killedName = app.displayName;
+          procName = app.processName;
           return { ...app, status: 'idle' };
         }
         return app;
@@ -225,21 +227,27 @@ export default function App() {
       id: `log-${Date.now()}`,
       timestamp: now,
       type: 'warning',
-      message: `Comando Stop-Process executado para ${killedName}.`,
+      message: `Comando Stop-Process executado para ${killedName || procName}.`,
       source: 'vigia.ps1',
     };
     setLogs((prev) => [newLog, ...prev.slice(0, 9)]);
-    showToast(`Processo ${killedName} finalizado no PC alvo.`, 'info');
+    showToast(`Processo ${killedName || procName} finalizado no PC alvo.`, 'info');
+
+    if (procName) {
+      await handleKillAll(procName);
+    }
   };
 
-  const handleToggleBlockApp = (appId: string) => {
+  const handleToggleBlockApp = async (appId: string) => {
     let appName = '';
     let isNowBlocked = false;
+    let procName = '';
 
     setApps((prev) =>
       prev.map((app) => {
         if (app.id === appId) {
           appName = app.displayName;
+          procName = app.processName;
           isNowBlocked = app.status !== 'blocked';
           return {
             ...app,
@@ -255,14 +263,33 @@ export default function App() {
       isNowBlocked ? `${appName} bloqueado com sucesso.` : `${appName} desbloqueado.`,
       isNowBlocked ? 'alert' : 'success'
     );
+
+    try {
+      const res = await fetch('/api/apps/toggle-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, processName: procName }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.apps)) {
+          setApps(data.apps);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao alternar bloqueio de aplicação no servidor:', e);
+    }
   };
 
-  const handleSaveAppRule = (appId: string, limitMinutes: number | null, isBlocked: boolean) => {
+  const handleSaveAppRule = async (appId: string, limitMinutes: number | null, isBlocked: boolean) => {
     let targetName = '';
+    let procName = '';
+
     setApps((prev) =>
       prev.map((app) => {
         if (app.id === appId) {
           targetName = app.displayName;
+          procName = app.processName;
           return {
             ...app,
             dailyLimitMinutes: limitMinutes,
@@ -280,6 +307,27 @@ export default function App() {
         : `Regra de ${targetName} atualizada (sem limite de tempo).`,
       'success'
     );
+
+    try {
+      const res = await fetch('/api/apps/rule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appId,
+          processName: procName,
+          limitMinutes,
+          isBlocked,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.apps)) {
+          setApps(data.apps);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao guardar regra da aplicação no servidor:', e);
+    }
   };
 
   const handleKillPid = async (pid: number, name?: string) => {
@@ -397,13 +445,35 @@ export default function App() {
     showToast(`Domínio ${domain} adicionado ao bloqueio de hosts.`, 'success');
   };
 
-  const handleAddCustomApp = (newApp: Omit<AppUsageRecord, 'id'>) => {
+  const handleAddCustomApp = async (newApp: Omit<AppUsageRecord, 'id'>) => {
     const entry: AppUsageRecord = {
       ...newApp,
       id: `app-${Date.now()}`,
     };
     setApps((prev) => [...prev, entry]);
     showToast(`Aplicação ${entry.displayName} adicionada à vigilância.`, 'success');
+
+    try {
+      const res = await fetch('/api/apps/rule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appId: entry.id,
+          processName: entry.processName,
+          limitMinutes: entry.dailyLimitMinutes,
+          isBlocked: entry.status === 'blocked',
+          status: entry.status,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.apps)) {
+          setApps(data.apps);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao registar aplicação personalizada no servidor:', e);
+    }
   };
 
   const handleRefreshTelemetry = () => {
@@ -651,36 +721,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Production Mode Status Indicator */}
-      <div className="border-b px-4 py-2 text-xs flex items-center justify-between gap-4 bg-emerald-950/40 border-emerald-500/30 text-emerald-300">
-        <div className="flex items-center gap-2 max-w-4xl">
-          <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
-          <span>
-            <strong>MODO DE PRODUÇÃO ATIVO:</strong> SentinelPC em escuta para {agent.targetUser} ({agent.targetMachine} @ {agent.ipAddress}).
-            {apps.length > 0 ? (
-              <span className="text-white ml-1">· {apps.length} aplicação(ões) registada(s) em tempo real.</span>
-            ) : (
-              <span className="text-emerald-300/80 ml-1">· A aguardar processos em execução no Windows.</span>
-            )}
-          </span>
-        </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsConnectModalOpen(true)}
-            className="px-2.5 py-1 text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded whitespace-nowrap transition-colors cursor-pointer"
-          >
-            Diagnóstico / Testar
-          </button>
-          <button
-            onClick={handleResetAgentData}
-            className="px-2.5 py-1 text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded whitespace-nowrap transition-colors cursor-pointer"
-            title="Limpar todos os dados e contadores"
-          >
-            Limpar Dados (0m)
-          </button>
-        </div>
-      </div>
 
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -763,6 +804,7 @@ export default function App() {
             onSyncOptDirectory={handleSyncOptDirectory}
             onOpenConnectModal={() => setIsConnectModalOpen(true)}
             onResetAgentData={handleResetAgentData}
+            appsCount={apps.length}
           />
         )}
       </main>

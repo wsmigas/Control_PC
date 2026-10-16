@@ -461,7 +461,15 @@ app.post('/api/report', (req, res) => {
   activePc.lastSeen = 'Agora mesmo';
   activePc.lastSeenTs = Date.now();
   if (targetMachine) activePc.nome = activePc.nome || targetMachine;
-  if (targetUser) activePc.target_user = targetUser;
+
+  // Preservar o utilizador configurado pelo administrador na interface web!
+  // Apenas auto-preencher se o PC ainda não tiver target_user configurado
+  if (targetUser) {
+    activePc.windowsUser = targetUser;
+    if (!activePc.target_user || activePc.target_user === 'Utilizador' || activePc.target_user === 'Tomas') {
+      activePc.target_user = targetUser;
+    }
+  }
   if (cleanClientIp && cleanClientIp !== '127.0.0.1' && (!activePc.host || activePc.host === '192.168.1.145')) {
     activePc.host = cleanClientIp;
   }
@@ -481,7 +489,6 @@ app.post('/api/report', (req, res) => {
   currentState.agent.installationStatus = 'installed';
 
   if (targetMachine) currentState.agent.targetMachine = targetMachine;
-  if (targetUser) currentState.agent.targetUser = targetUser;
   if (osVersion) currentState.agent.osVersion = osVersion;
 
   // Store detailed running processes
@@ -521,18 +528,19 @@ app.post('/api/report', (req, res) => {
       }
     });
 
-    // 1. Atualizar estado das apps já monitorizadas
+    // 1. Atualizar estado das apps já monitorizadas sem perder bloqueio
     for (const app of currentState.apps) {
       const lower = app.processName.toLowerCase();
+      const isAlreadyBlocked = (app.status === 'blocked' || app.isBlocked === true);
       if (runningMap.has(lower)) {
-        app.status = app.status === 'blocked' ? 'blocked' : 'running';
+        app.status = isAlreadyBlocked ? 'blocked' : 'running';
         const match = runningMap.get(lower);
         if (match?.title && match.title !== match.name) {
           app.windowTitle = match.title;
         }
         app.lastActiveTime = 'Agora mesmo';
       } else if (app.status === 'running') {
-        app.status = 'idle';
+        app.status = isAlreadyBlocked ? 'blocked' : 'idle';
       }
     }
 
@@ -644,17 +652,41 @@ app.post('/api/report', (req, res) => {
       app.minutesToday = Math.floor((app as any)._activeSecs / 60);
       if (app.minutesToday === 0) app.minutesToday = 1; // Dá visibilidade de 1m na interface
       app.windowTitle = activeTitle || app.windowTitle;
-      app.status = 'running';
       app.lastActiveTime = 'Agora mesmo';
 
       // Check daily limit or blocked
-      if (app.status === 'blocked' || (app.dailyLimitMinutes !== null && app.minutesToday >= app.dailyLimitMinutes)) {
+      const isOverLimit = (app.dailyLimitMinutes !== null && app.dailyLimitMinutes !== undefined && app.minutesToday >= app.dailyLimitMinutes);
+      const isBlocked = (app.status === 'blocked' || app.isBlocked === true || isOverLimit);
+
+      if (isBlocked) {
         immediateAction = {
           type: 'kill',
           process: exeName,
-          message: `Limite diário esgotado para ${app.displayName}.`,
+          message: isOverLimit ? `Limite diário esgotado para ${app.displayName}.` : `${app.displayName} está bloqueado pelo controlo parental.`,
         };
         app.status = 'blocked';
+        app.isBlocked = true;
+      } else {
+        app.status = 'running';
+      }
+    }
+
+    // Verificação adicional para qualquer processo bloqueado em execução
+    const runningList = currentState.runningProcesses[pid];
+    if (!immediateAction && Array.isArray(runningList)) {
+      for (const proc of runningList) {
+        const lower = proc.name.toLowerCase();
+        const blkApp = currentState.apps.find((a: any) => a.processName.toLowerCase() === lower);
+        if (blkApp && (blkApp.status === 'blocked' || blkApp.isBlocked === true || (blkApp.dailyLimitMinutes !== null && blkApp.minutesToday >= blkApp.dailyLimitMinutes))) {
+          immediateAction = {
+            type: 'kill',
+            process: proc.name,
+            message: `${blkApp.displayName} está bloqueado pelo controlo parental.`,
+          };
+          blkApp.status = 'blocked';
+          blkApp.isBlocked = true;
+          break;
+        }
       }
     }
 
@@ -757,6 +789,133 @@ app.get('/api/processes', (req, res) => {
     target: activePc.target_user,
     pc: activePc.nome,
   });
+});
+
+// 7b. Atualizar regra de limite horário ou bloqueio de aplicação
+app.post('/api/apps/rule', (req, res) => {
+  const { appId, processName, limitMinutes, isBlocked, status } = req.body;
+  const activePc = getActivePc();
+  const pid = activePc.id;
+
+  let app = currentState.apps.find((a: any) =>
+    (appId && a.id === appId) ||
+    (processName && a.processName.toLowerCase() === processName.toLowerCase())
+  );
+
+  if (!app && (appId || processName)) {
+    const rawName = processName || appId.replace(/^app-/, '');
+    const cleanName = rawName.replace(/\.exe$/i, '');
+    const category = categorizeProcess(cleanName);
+    app = {
+      id: appId || `app-${cleanName.toLowerCase()}`,
+      processName: rawName.endsWith('.exe') ? rawName : `${rawName}.exe`,
+      displayName: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
+      iconType: 'box',
+      category,
+      minutesToday: 0,
+      dailyLimitMinutes: limitMinutes !== undefined ? limitMinutes : null,
+      status: isBlocked ? 'blocked' : 'idle',
+      windowTitle: '',
+      lastActiveTime: 'Agora mesmo',
+      isRestricted: isBlocked || limitMinutes !== null,
+      allowedDays: [0, 1, 2, 3, 4, 5, 6],
+    };
+    currentState.apps.push(app);
+  }
+
+  if (app) {
+    if (limitMinutes !== undefined) {
+      app.dailyLimitMinutes = limitMinutes;
+      app.isRestricted = limitMinutes !== null || isBlocked;
+    }
+    if (isBlocked !== undefined) {
+      app.status = isBlocked ? 'blocked' : (app.status === 'blocked' ? 'idle' : app.status);
+      app.isBlocked = isBlocked;
+      app.isRestricted = isBlocked || (app.dailyLimitMinutes !== null);
+    }
+    if (status !== undefined) {
+      app.status = status;
+      app.isBlocked = status === 'blocked';
+    }
+
+    // Se estiver bloqueada ou o limite diário for ultrapassado, adicionar ordem de fecho imediato
+    if (app.status === 'blocked' || app.isBlocked || (app.dailyLimitMinutes !== null && app.minutesToday >= app.dailyLimitMinutes)) {
+      if (!currentState.pendingActions[pid]) {
+        currentState.pendingActions[pid] = [];
+      }
+      currentState.pendingActions[pid].push({
+        id: `act-${Date.now()}-${Math.random()}`,
+        type: 'killall',
+        name: app.processName,
+        timestamp: Date.now(),
+      });
+
+      currentState.logs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString('pt-PT'),
+        type: 'alert',
+        message: `Aplicação "${app.displayName}" (${app.processName}) marcada como BLOQUEADA.`,
+        source: 'dashboard',
+      });
+    }
+
+    saveState();
+    return res.json({ success: true, app, apps: currentState.apps });
+  }
+
+  return res.status(404).json({ success: false, error: 'Aplicação não encontrada' });
+});
+
+// 7c. Alternar bloqueio de aplicação (Toggle Block)
+app.post('/api/apps/toggle-block', (req, res) => {
+  const { appId, processName } = req.body;
+  const activePc = getActivePc();
+  const pid = activePc.id;
+
+  let app = currentState.apps.find((a: any) =>
+    (appId && a.id === appId) ||
+    (processName && a.processName.toLowerCase() === processName.toLowerCase())
+  );
+
+  if (app) {
+    const isNowBlocked = app.status !== 'blocked' && !app.isBlocked;
+    app.status = isNowBlocked ? 'blocked' : 'idle';
+    app.isBlocked = isNowBlocked;
+    app.isRestricted = isNowBlocked || (app.dailyLimitMinutes !== null);
+
+    if (isNowBlocked) {
+      if (!currentState.pendingActions[pid]) {
+        currentState.pendingActions[pid] = [];
+      }
+      currentState.pendingActions[pid].push({
+        id: `act-${Date.now()}-${Math.random()}`,
+        type: 'killall',
+        name: app.processName,
+        timestamp: Date.now(),
+      });
+
+      currentState.logs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString('pt-PT'),
+        type: 'alert',
+        message: `Aplicação "${app.displayName}" (${app.processName}) bloqueada pelo utilizador.`,
+        source: 'dashboard',
+      });
+    } else {
+      currentState.logs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString('pt-PT'),
+        type: 'info',
+        message: `Aplicação "${app.displayName}" (${app.processName}) desbloqueada.`,
+        source: 'dashboard',
+      });
+    }
+
+    saveState();
+    return res.json({ success: true, isBlocked: isNowBlocked, app, apps: currentState.apps });
+  }
+
+  return res.status(404).json({ success: false, error: 'Aplicação não encontrada' });
 });
 
 // 8. Fechar processo por PID
@@ -1299,10 +1458,24 @@ while ($true) {
             uptimeSeconds = if ($os) { [int]((Get-Date) - $os.LastBootUpTime).TotalSeconds } else { 3600 }
         }
 
+        # Obter utilizador real interativo com sessão ativa (evita devolver 'admin' se o script rodar elevado)
+        $detectedUser = $env:USERNAME
+        try {
+            $csObj = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+            if ($csObj -and $csObj.UserName) {
+                $detectedUser = $csObj.UserName.Split('\')[-1]
+            } else {
+                $expProc = Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($expProc -and $expProc.UserName) {
+                    $detectedUser = $expProc.UserName.Split('\')[-1]
+                }
+            }
+        } catch {}
+
         # 5. Envia telemetria via HTTP REST para o servidor
         $body = @{
             targetMachine = $env:COMPUTERNAME
-            targetUser = $env:USERNAME
+            targetUser = $detectedUser
             activeProcess = $activeName
             activeTitle = $activeTitle
             idleMs = [int]$idle
@@ -1320,10 +1493,27 @@ while ($true) {
             if ($res.action.type -eq "kill" -and $res.action.process) {
                 $pName = ($res.action.process -replace '\.exe$','')
                 Stop-Process -Name $pName -Force -ErrorAction SilentlyContinue
-                Show-Alert "Limite diário esgotado para esta aplicação."
+                if ($pName -match '^(CalculatorApp|calc)$') {
+                    Get-Process -Name "CalculatorApp","calc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                }
+                Show-Alert "Aplicação bloqueada pelo controlo parental: $($res.action.process)"
             }
             if ($res.action.type -eq "lock_screen") {
                 rundll32.exe user32.dll,LockWorkStation
+            }
+        }
+
+        # 6b. Execução imediata de bloqueio para processos nas regras recebidas
+        if ($res.regras -and $res.regras.apps) {
+            foreach ($pItem in $procs) {
+                $cProc = ($pItem.name -replace '\.exe$','').ToLower()
+                $r = $res.regras.apps.$cProc
+                if ($r -and $r.bloquear -eq $true) {
+                    Stop-Process -Name ($pItem.name -replace '\.exe$','') -Force -ErrorAction SilentlyContinue
+                    if ($cProc -match '^(calculatorapp|calc)$') {
+                        Get-Process -Name "CalculatorApp","calc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                    }
+                }
             }
         }
 
@@ -1333,7 +1523,11 @@ while ($true) {
                     Stop-Process -Id [int]$act.pid -Force -ErrorAction SilentlyContinue
                 }
                 if ($act.type -eq "killall" -and $act.name) {
-                    Stop-Process -Name ($act.name -replace '\.exe$','') -Force -ErrorAction SilentlyContinue
+                    $rawName = ($act.name -replace '\.exe$','')
+                    Stop-Process -Name $rawName -Force -ErrorAction SilentlyContinue
+                    if ($rawName -match '^(CalculatorApp|calc)$') {
+                        Get-Process -Name "CalculatorApp","calc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                    }
                 }
                 if ($act.type -eq "msg" -and $act.text) {
                     Show-Alert $act.text

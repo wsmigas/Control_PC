@@ -40,6 +40,7 @@ interface AdminTabProps {
   onSyncOptDirectory: () => void;
   onOpenConnectModal?: () => void;
   onResetAgentData?: () => void;
+  appsCount?: number;
 }
 
 export const AdminTab: React.FC<AdminTabProps> = ({
@@ -54,6 +55,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   onSyncOptDirectory,
   onOpenConnectModal,
   onResetAgentData,
+  appsCount,
 }) => {
   // Active PC form fields
   const [ip, setIp] = useState(agent.ipAddress);
@@ -419,6 +421,48 @@ irm ${installCmdUrl} | iex`;
 
   return (
     <div className="space-y-6">
+      {/* Production Mode Status & Diagnostics Bar (Exclusivo deste módulo) */}
+      <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/40 p-3.5 text-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-emerald-300 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+          <span>
+            <strong className="text-white">MODO DE PRODUÇÃO ATIVO:</strong> SentinelPC em escuta para {agent.targetUser} ({agent.targetMachine} @ {agent.ipAddress}).
+            {typeof appsCount === 'number' && appsCount > 0 ? (
+              <span className="text-emerald-100 ml-1">· {appsCount} aplicação(ões) registada(s) em tempo real.</span>
+            ) : (
+              <span className="text-emerald-300/80 ml-1">· A aguardar processos em execução no Windows.</span>
+            )}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenConnectModal || onRunInstallWizard}
+            className="px-3 py-1.5 text-xs font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 rounded-lg whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5"
+            title="Diagnóstico de comunicação e comandos do agente"
+          >
+            <Activity className="h-3.5 w-3.5 text-cyan-400" />
+            <span>Diagnóstico / Testar</span>
+          </button>
+          {onResetAgentData && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Limpar todos os contadores e dados deste PC?')) {
+                  onResetAgentData();
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 rounded-lg whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5"
+              title="Limpar todos os dados e contadores"
+            >
+              <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+              <span>Limpar Dados (0m)</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Page Header */}
       <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
