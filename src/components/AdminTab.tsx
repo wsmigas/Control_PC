@@ -229,10 +229,57 @@ irm ${installCmdUrl} | iex`;
       clearTimeout(stepTimer1);
       clearTimeout(stepTimer2);
       clearTimeout(stepTimer3);
-      setIsUpdatingGithub(false);
-      const errMsg = err.message || 'Erro de comunicação com o servidor';
-      setGithubError(errMsg);
-      setGithubLogs((prev) => [...prev, `[ERRO DE LIGAÇÃO] ${errMsg}`]);
+
+      const rawMsg = err?.message || 'Erro de comunicação';
+      // Se a ligação caiu durante a compilação/reinício, o servidor pode ter reiniciado com o novo build
+      setGithubLogs((prev) => [
+        ...prev,
+        `[i] Nota: O servidor pode ter terminado a compilação e reiniciado o serviço systemd.`,
+        `[i] A verificar reconexão ao servidor SentinelPC em segundo plano...`,
+      ]);
+
+      let recovered = false;
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        try {
+          const checkRes = await fetch('/api/status', { cache: 'no-store' });
+          if (checkRes.ok) {
+            recovered = true;
+            break;
+          }
+        } catch {
+          // Servidor ainda a concluir arranque
+        }
+      }
+
+      if (recovered) {
+        setGithubStep(5);
+        setIsUpdatingGithub(false);
+        setGithubError(null);
+        setGithubLogs((prev) => [
+          ...prev,
+          '[✓] Ligação restabelecida com sucesso!',
+          '[✓] O servidor SentinelPC reiniciou e está operacional com a versão mais recente.',
+          '[✓] A recarregar o painel em 5 segundos...',
+        ]);
+        const now = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        setLastGithubUpdate(`Hoje às ${now}`);
+        setGithubStatus((prev) => ({
+          ...prev,
+          isUpToDate: true,
+        }));
+        onSyncOptDirectory();
+        setAutoReloadCountdown(5);
+      } else {
+        setIsUpdatingGithub(false);
+        setGithubError(rawMsg);
+        setGithubLogs((prev) => [
+          ...prev,
+          `[ERRO DE LIGAÇÃO] ${rawMsg}`,
+          `[DICA] Pode verificar o estado do serviço no terminal do servidor com:`,
+          `       sudo systemctl status control_pc`,
+        ]);
+      }
     }
   };
 

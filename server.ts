@@ -1646,7 +1646,7 @@ app.post('/api/admin/github-update', async (req, res) => {
 
   try {
     const scriptPath = path.join(__dirname, 'update_from_github.sh');
-    let updateCmd = `bash "${scriptPath}" "${appDir}"`;
+    let updateCmd = `bash "${scriptPath}" "${appDir}" --no-restart`;
     if (!fs.existsSync(scriptPath)) {
       updateCmd = `cd "${appDir}" && git fetch origin main && git reset --hard origin/main && npm install --legacy-peer-deps --no-audit && npm run build`;
     }
@@ -1698,6 +1698,14 @@ app.post('/api/admin/github-update', async (req, res) => {
       commit: currentCommit,
       message: `Painel atualizado com sucesso! (Versão: ${currentCommit})`,
     });
+
+    // Reiniciar o serviço systemd de forma segura após a resposta HTTP ser enviada ao browser
+    setTimeout(() => {
+      try {
+        console.log('[GitHub Update] A reiniciar serviço systemd após resposta...');
+        exec('systemctl restart control_pc 2>/dev/null || systemctl restart sentinel_pc 2>/dev/null', () => {});
+      } catch {}
+    }, 2500);
   } catch (err: any) {
     const errMsg = err.message || 'Falha durante execução do script de atualização';
     addLog(`[FALHA] ${errMsg}`);
