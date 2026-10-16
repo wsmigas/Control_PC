@@ -63,7 +63,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [username, setUsername] = useState(agent.targetUser);
   const [port, setPort] = useState(agent.port || 5985);
   const [connMethod, setConnMethod] = useState<'agent_poll' | 'ssh' | 'winrm'>((agent.connectionMethod as any) || 'agent_poll');
-  const [pollingInterval, setPollingInterval] = useState(agent.pollingIntervalSeconds || 10);
+  const [pollingInterval, setPollingInterval] = useState(agent.pollingIntervalSeconds || 3);
 
   // Multi-PC modal / edit form state
   const [isPcModalOpen, setIsPcModalOpen] = useState(false);

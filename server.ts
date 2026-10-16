@@ -55,7 +55,7 @@ const defaultState = {
     ipAddress: '192.168.1.145',
     port: 5985,
     connectionMethod: 'agent_poll',
-    pollingIntervalSeconds: 10,
+    pollingIntervalSeconds: 3,
     osVersion: 'Windows 11',
     version: '3.0.0-agente-http',
     processesCount: 0,
@@ -226,9 +226,9 @@ app.get('/api/status', (req, res) => {
   const activePc = getActivePc();
   const pid = activePc.id;
 
-  // Cálculo real-time de estado Online (o agente envia heartbeat a cada 10s; tolerância de 35s)
+  // Cálculo real-time de estado Online (o agente envia heartbeat a cada 3s; tolerância de 20s)
   const now = Date.now();
-  const isActuallyOnline = !!(activePc.lastSeenTs && (now - activePc.lastSeenTs < 35000));
+  const isActuallyOnline = !!(activePc.lastSeenTs && (now - activePc.lastSeenTs < 20000));
   activePc.isOnline = isActuallyOnline;
 
   // Sync active PC info with agent object
@@ -597,7 +597,7 @@ app.post('/api/report', (req, res) => {
     currentState.agent.screenTimeMinutesToday = Math.floor(req.body.activeSecondsToday / 60);
   } else if (!isIdle) {
     if (!currentState.screenTimeTodaySeconds) currentState.screenTimeTodaySeconds = {};
-    currentState.screenTimeTodaySeconds[pid] = (currentState.screenTimeTodaySeconds[pid] || 0) + 10;
+    currentState.screenTimeTodaySeconds[pid] = (currentState.screenTimeTodaySeconds[pid] || 0) + 3;
     currentState.agent.screenTimeMinutesToday = Math.floor(currentState.screenTimeTodaySeconds[pid] / 60);
   }
 
@@ -646,9 +646,9 @@ app.post('/api/report', (req, res) => {
       };
       currentState.apps.push(app);
     } else {
-      // Incrementa 10 segundos ao contador interno da app
+      // Incrementa 3 segundos ao contador interno da app
       if (!(app as any)._activeSecs) (app as any)._activeSecs = (app.minutesToday || 0) * 60;
-      (app as any)._activeSecs += 10;
+      (app as any)._activeSecs += 3;
       app.minutesToday = Math.floor((app as any)._activeSecs / 60);
       if (app.minutesToday === 0) app.minutesToday = 1; // Dá visibilidade de 1m na interface
       app.windowTitle = activeTitle || app.windowTitle;
@@ -1385,7 +1385,10 @@ function Get-RunningAppsList {
 
 function Show-Alert($msg) {
     try {
-        (New-Object -ComObject WScript.Shell).Popup($msg, 15, "SentinelPC Controlo Parental", 48) | Out-Null
+        # Dispara popup em processo separado nao-bloqueante para manter o ciclo de 3 segundos fluido
+        $safeMsg = $msg.Replace("'", "''")
+        $alertCmd = "(New-Object -ComObject WScript.Shell).Popup('$safeMsg', 15, 'SentinelPC Controlo Parental', 48)"
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', $alertCmd -ErrorAction SilentlyContinue
     } catch {}
 }
 
@@ -1407,7 +1410,7 @@ if (Test-Path $dailyUsageFile) {
     } catch {}
 }
 
-Write-Host "[SentinelPC] Agente em comunicacao continua com $ServerUrl..." -ForegroundColor Cyan
+Write-Host "[SentinelPC] Agente em comunicacao continua a cada 3 segundos com $ServerUrl..." -ForegroundColor Cyan
 
 while ($true) {
     try {
@@ -1429,12 +1432,12 @@ while ($true) {
         $activeName = if ($fg) { $fg.name } else { "idle" }
         $activeTitle = if ($fg) { $fg.title } else { "" }
 
-        # Se houve atividade do utilizador nos ultimos 5 minutos (< 300.000ms), acumula tempo ativo
+        # Se houve atividade do utilizador nos ultimos 5 minutos (< 300.000ms), acumula tempo ativo (ciclo de 3s)
         if ($idle -lt 300000) {
-            $localUsage.activeSeconds += 10
+            $localUsage.activeSeconds += 3
             if ($activeName -and $activeName -ne "idle") {
                 if (-not $localUsage.apps[$activeName]) { $localUsage.apps[$activeName] = 0 }
-                $localUsage.apps[$activeName] += 10
+                $localUsage.apps[$activeName] += 3
             }
             try {
                 $localUsage | ConvertTo-Json -Compress | Set-Content $dailyUsageFile -Force -ErrorAction SilentlyContinue
@@ -1545,7 +1548,7 @@ while ($true) {
         # Resiliente: se o servidor estiver temporariamente indisponivel, continua em loop
     }
 
-    Start-Sleep -Seconds 10
+    Start-Sleep -Seconds 3
 }
 `;
 

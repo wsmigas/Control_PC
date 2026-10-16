@@ -6,7 +6,7 @@
     "ipAddress": "192.168.1.145",
     "port": 5985,
     "connectionMethod": "agent_poll",
-    "pollingIntervalSeconds": 60,
+    "pollingIntervalSeconds": 3,
     "osVersion": "Windows 11",
     "version": "2.4.2-blobs",
     "processesCount": 0,
