@@ -113,6 +113,7 @@ export interface AgentIntegrity {
   installationStatus: 'installed' | 'installing' | 'not_installed' | 'error';
   optInstallPath: string;
   hardware?: HardwareState;
+  screenTimeMinutesToday?: number;
 }
 
 export interface SystemLogEntry {

@@ -31,6 +31,7 @@ import {
   AgentIntegrity,
   SystemLogEntry,
   PCConfig,
+  ProcessItem,
 } from './types';
 import { ShieldAlert, CheckCircle, Info } from 'lucide-react';
 
@@ -84,6 +85,7 @@ export default function App() {
   const [logs, setLogs] = useState<SystemLogEntry[]>(INITIAL_LOGS);
   const [pcsList, setPcsList] = useState<PCConfig[]>([]);
   const [activePcId, setActivePcId] = useState<string>('pc1');
+  const [runningProcesses, setRunningProcesses] = useState<ProcessItem[]>([]);
 
   // Modal state
   const [editingApp, setEditingApp] = useState<AppUsageRecord | null>(null);
@@ -107,6 +109,10 @@ export default function App() {
             if (data.logs) setLogs(data.logs);
             if (Array.isArray(data.pcsList)) setPcsList(data.pcsList);
             if (data.activePc?.id) setActivePcId(data.activePc.id);
+            if (Array.isArray(data.runningProcesses)) setRunningProcesses(data.runningProcesses);
+            if (Array.isArray(data.curfewSchedule) && data.curfewSchedule.length > 0) {
+              setCurfewSchedule(data.curfewSchedule);
+            }
           }
         }
       } catch {
@@ -151,12 +157,19 @@ export default function App() {
     }, 3500);
   };
 
-  // Calculate current day quota
-  const todaySchedule = curfewSchedule.find((c) => c.dayId === 'wed') ?? curfewSchedule[0];
+  // Determine today's day of week dynamically (sun, mon, tue, wed, thu, fri, sat)
+  const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+  const todayDayIndex = new Date().getDay();
+  const todayDayId = dayKeys[todayDayIndex];
+
+  // Calculate current day quota based on the actual day of the week
+  const todaySchedule = curfewSchedule.find((c) => c.dayId === todayDayId) ?? curfewSchedule[0];
   const dailyQuotaMinutes = todaySchedule.maxMinutes;
 
-  // Calculate total screen time today across all apps
-  const totalMinutesToday = apps.reduce((acc, curr) => acc + curr.minutesToday, 0);
+  // Calculate total screen time today across all apps or agent active time
+  const appsMinutesToday = apps.reduce((acc, curr) => acc + curr.minutesToday, 0);
+  const agentScreenTime = (agent as any).screenTimeMinutesToday || 0;
+  const totalMinutesToday = Math.max(appsMinutesToday, agentScreenTime);
 
   // Handlers
   const handleToggleEmergencyLock = () => {
@@ -269,35 +282,94 @@ export default function App() {
     );
   };
 
-  const handleUpdateCurfewDay = (dayId: string, updates: Partial<CurfewDaySchedule>) => {
-    setCurfewSchedule((prev) =>
-      prev.map((d) => (d.dayId === dayId ? { ...d, ...updates } : d))
-    );
-    showToast('Horário semanal atualizado.', 'info');
+  const handleKillPid = async (pid: number, name?: string) => {
+    try {
+      const res = await fetch('/api/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid, process: name }),
+      });
+      if (res.ok) {
+        setRunningProcesses((prev) => prev.filter((p) => p.pid !== pid));
+        showToast(`Comando de finalização enviado para PID ${pid} (${name || 'processo'}).`, 'success');
+      }
+    } catch {
+      showToast('Erro ao comunicar com o servidor.', 'alert');
+    }
   };
 
-  const handleApplyCurfewPreset = (preset: 'school' | 'vacation' | 'strict') => {
+  const handleKillAll = async (name: string) => {
+    try {
+      const res = await fetch('/api/killall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        setRunningProcesses((prev) => prev.filter((p) => p.name.toLowerCase() !== name.toLowerCase()));
+        showToast(`Comando de encerramento enviado para todas as instâncias de ${name}.`, 'success');
+      }
+    } catch {
+      showToast('Erro ao comunicar com o servidor.', 'alert');
+    }
+  };
+
+  const handleUpdateCurfewDay = async (dayId: string, updates: Partial<CurfewDaySchedule>) => {
+    const newSchedule = curfewSchedule.map((d) => (d.dayId === dayId ? { ...d, ...updates } : d));
+    setCurfewSchedule(newSchedule);
+
+    const targetDay = newSchedule.find((d) => d.dayId === dayId);
+    const dayName = targetDay?.dayName || dayId;
+
+    if (updates.maxMinutes !== undefined) {
+      showToast(`${dayName}: Quota diária alterada para ${formatMinutesToHuman(updates.maxMinutes)}.`, 'success');
+    } else if (updates.endHour !== undefined) {
+      showToast(`${dayName}: Toque de recolher atualizado para as ${updates.endHour}.`, 'info');
+    } else {
+      showToast(`Horário de ${dayName} atualizado com sucesso.`, 'info');
+    }
+
+    try {
+      await fetch('/api/curfew', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: newSchedule }),
+      });
+    } catch {
+      // offline fallback
+    }
+  };
+
+  const handleApplyCurfewPreset = async (preset: 'school' | 'vacation' | 'strict') => {
+    let newSchedule = curfewSchedule;
     if (preset === 'school') {
-      setCurfewSchedule(INITIAL_CURFEW_SCHEDULE);
+      newSchedule = INITIAL_CURFEW_SCHEDULE;
       showToast('Modelo Escolar Padrão aplicado (Seg-Qui: 21:30, Sex-Sáb: 23:00).', 'success');
     } else if (preset === 'vacation') {
-      setCurfewSchedule((prev) =>
-        prev.map((d) => ({
-          ...d,
-          endHour: '23:30',
-          maxMinutes: d.maxMinutes + 90,
-        }))
-      );
-      showToast('Modo Férias ativado: +1h30m diárias e recolher alargado.', 'success');
+      newSchedule = curfewSchedule.map((d) => ({
+        ...d,
+        endHour: '23:30',
+        maxMinutes: d.maxMinutes + 90,
+      }));
+      showToast('Modo Férias ativado: +1h30m diárias e recolher alargado às 23:30.', 'success');
     } else if (preset === 'strict') {
-      setCurfewSchedule((prev) =>
-        prev.map((d) => ({
-          ...d,
-          endHour: '20:30',
-          maxMinutes: Math.min(d.maxMinutes, 120),
-        }))
-      );
+      newSchedule = curfewSchedule.map((d) => ({
+        ...d,
+        endHour: '20:30',
+        maxMinutes: Math.min(d.maxMinutes, 120),
+      }));
       showToast('Modo Estudo Estrito ativado: recolher antecipado às 20:30.', 'info');
+    }
+    setCurfewSchedule(newSchedule);
+
+    try {
+      await fetch('/api/curfew', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: newSchedule }),
+      });
+    } catch {
+      // offline fallback
     }
   };
 
@@ -629,10 +701,14 @@ export default function App() {
         {currentTab === 'apps' && (
           <AppsManagementTab
             apps={apps}
+            runningProcesses={runningProcesses}
             onEditApp={setEditingApp}
             onToggleBlockApp={handleToggleBlockApp}
             onKillProcess={handleKillProcess}
+            onKillPid={handleKillPid}
+            onKillAll={handleKillAll}
             onAddCustomApp={handleAddCustomApp}
+            onRefreshProcs={handleProbeAgent}
           />
         )}
 
@@ -649,6 +725,7 @@ export default function App() {
         {currentTab === 'curfew' && (
           <CurfewTab
             schedule={curfewSchedule}
+            todayDayId={todayDayId}
             onUpdateDay={handleUpdateCurfewDay}
             onApplyPreset={handleApplyCurfewPreset}
           />

@@ -174,10 +174,18 @@ function categorizeProcess(processName: string): 'games' | 'social' | 'study' | 
   return 'system';
 }
 
-// Format rules matching Python / agent schema
+// Format rules matching Python / agent schema - always dynamic for today's day
 function getFormattedRules() {
-  const weekday = currentState.curfewSchedule.find((c: any) => c.dayId === 'mon') || { startHour: '15:00', endHour: '21:00', maxMinutes: 180 };
-  const weekend = currentState.curfewSchedule.find((c: any) => c.dayId === 'sat') || { startHour: '09:00', endHour: '21:00', maxMinutes: 240 };
+  const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const todayDayIndex = new Date().getDay();
+  const todayDayId = dayKeys[todayDayIndex];
+
+  const today = currentState.curfewSchedule.find((c: any) => c.dayId === todayDayId)
+    || currentState.curfewSchedule[0]
+    || { startHour: '08:00', endHour: '21:30', maxMinutes: 210 };
+
+  const weekday = currentState.curfewSchedule.find((c: any) => c.isSchoolDay) || today;
+  const weekend = currentState.curfewSchedule.find((c: any) => !c.isSchoolDay) || today;
 
   const appsRules: Record<string, any> = {};
   for (const a of currentState.apps) {
@@ -193,12 +201,18 @@ function getFormattedRules() {
   }
 
   return {
-    diario_min: weekday.maxMinutes || 180,
+    diario_min: today.maxMinutes || 180, // Quota do dia atual dinamicamente respeitada
+    hoje_dia: todayDayId,
     aviso_min: 5,
+    toque_recolher: today.endHour || '21:30',
+    inicio_permitido: today.startHour || '08:00',
+    dia_ativo: today.enabled !== false,
     horario: {
-      semana: [weekday.startHour || '15:00', weekday.endHour || '21:00'],
-      fimsemana: [weekend.startHour || '09:00', weekend.endHour || '21:00'],
+      semana: [weekday.startHour || '08:00', weekday.endHour || '21:30'],
+      fimsemana: [weekend.startHour || '09:00', weekend.endHour || '23:30'],
+      hoje: [today.startHour || '08:00', today.endHour || '21:30'],
     },
+    schedule: currentState.curfewSchedule,
     apps: appsRules,
   };
 }
@@ -207,16 +221,27 @@ function getFormattedRules() {
 // API ROUTES
 // -----------------------------------------------------------------------------
 
-// 1. Status geral para o frontend
+// 1. Status geral para o frontend com detecção real-time online
 app.get('/api/status', (req, res) => {
   const activePc = getActivePc();
   const pid = activePc.id;
+
+  // Cálculo real-time de estado Online (o agente envia heartbeat a cada 10s; tolerância de 35s)
+  const now = Date.now();
+  const isActuallyOnline = !!(activePc.lastSeenTs && (now - activePc.lastSeenTs < 35000));
+  activePc.isOnline = isActuallyOnline;
 
   // Sync active PC info with agent object
   currentState.agent.ipAddress = activePc.host;
   currentState.agent.targetMachine = activePc.nome;
   currentState.agent.targetUser = activePc.target_user;
   currentState.agent.connectionMethod = activePc.connectionMethod || 'agent_poll';
+  currentState.agent.installationStatus = isActuallyOnline ? 'installed' : (activePc.lastSeenTs ? 'installed' : 'not_installed');
+  currentState.agent.taskStatus = isActuallyOnline
+    ? (currentState.runningProcesses[pid]?.length > 0
+        ? `Ativo (${currentState.runningProcesses[pid].length} aplicações em execução)`
+        : 'Online (Ambiente de Trabalho)')
+    : 'Offline (Desconectado / À espera do agente)';
 
   const hw = currentState.hardware[pid] || currentState.hardware['default'] || null;
   if (hw) {
@@ -225,8 +250,14 @@ app.get('/api/status', (req, res) => {
 
   res.json({
     ...currentState,
-    activePc,
-    pcsList: Object.values(currentState.pcs || {}),
+    activePc: {
+      ...activePc,
+      isOnline: isActuallyOnline,
+    },
+    pcsList: Object.values(currentState.pcs || {}).map((p: any) => ({
+      ...p,
+      isOnline: !!(p.lastSeenTs && (now - p.lastSeenTs < 35000)),
+    })),
     runningProcesses: currentState.runningProcesses[pid] || [],
     hardware: hw,
   });
@@ -358,6 +389,7 @@ app.post('/api/report', (req, res) => {
   const now = new Date();
   const timeStr = now.toLocaleTimeString('pt-PT');
   const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
 
   // Determine client IP
   const rawIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip || '127.0.0.1';
@@ -476,7 +508,65 @@ app.post('/api/report', (req, res) => {
 
     currentState.runningProcesses[pid] = formatted;
     currentState.agent.processesCount = formatted.length;
-    currentState.agent.taskStatus = `Ativo (${formatted.length} processos monitorizados)`;
+    currentState.agent.taskStatus = formatted.length > 0
+      ? `Ativo (${formatted.length} aplicações em execução)`
+      : 'Online (Ambiente de Trabalho)';
+
+    // Sincronizar aplicações abertas com a lista currentState.apps
+    const runningMap = new Map<string, any>();
+    formatted.forEach((proc: any) => {
+      const lower = proc.name.toLowerCase();
+      if (!runningMap.has(lower)) {
+        runningMap.set(lower, proc);
+      }
+    });
+
+    // 1. Atualizar estado das apps já monitorizadas
+    for (const app of currentState.apps) {
+      const lower = app.processName.toLowerCase();
+      if (runningMap.has(lower)) {
+        app.status = app.status === 'blocked' ? 'blocked' : 'running';
+        const match = runningMap.get(lower);
+        if (match?.title && match.title !== match.name) {
+          app.windowTitle = match.title;
+        }
+        app.lastActiveTime = 'Agora mesmo';
+      } else if (app.status === 'running') {
+        app.status = 'idle';
+      }
+    }
+
+    // 2. Auto-descoberta de novas apps em execução (Calculadora, Navegadores, Jogos, etc.)
+    for (const proc of formatted) {
+      const lower = proc.name.toLowerCase();
+      const cleanName = proc.name.replace(/\.exe$/i, '');
+      const alreadyTracked = currentState.apps.some((a: any) => a.processName.toLowerCase() === lower);
+
+      if (!alreadyTracked && cleanName.length > 1) {
+        const category = categorizeProcess(cleanName);
+        let displayName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+        if (cleanName.toLowerCase() === 'calculatorapp' || cleanName.toLowerCase() === 'calc') {
+          displayName = 'Calculadora';
+        } else if (proc.title && proc.title !== proc.name && proc.title.length < 35) {
+          displayName = proc.title;
+        }
+
+        currentState.apps.push({
+          id: `app-${cleanName.toLowerCase()}`,
+          processName: proc.name,
+          displayName,
+          iconType: 'box',
+          category,
+          minutesToday: 0,
+          dailyLimitMinutes: category === 'games' ? 90 : category === 'social' ? 60 : null,
+          status: 'running',
+          windowTitle: proc.title || '',
+          lastActiveTime: 'Agora mesmo',
+          isRestricted: category === 'games' || category === 'social',
+          allowedDays: [0, 1, 2, 3, 4, 5, 6],
+        });
+      }
+    }
   }
 
   // Store hardware metrics if provided
@@ -493,11 +583,31 @@ app.post('/api/report', (req, res) => {
     };
   }
 
+  // Contabilização de Tempo de Utilização Real do Computador
+  const isIdle = idleMs && idleMs > 300000;
+  if (req.body.activeSecondsToday !== undefined && req.body.activeSecondsToday > 0) {
+    currentState.agent.screenTimeMinutesToday = Math.floor(req.body.activeSecondsToday / 60);
+  } else if (!isIdle) {
+    if (!currentState.screenTimeTodaySeconds) currentState.screenTimeTodaySeconds = {};
+    currentState.screenTimeTodaySeconds[pid] = (currentState.screenTimeTodaySeconds[pid] || 0) + 10;
+    currentState.agent.screenTimeMinutesToday = Math.floor(currentState.screenTimeTodaySeconds[pid] / 60);
+  }
+
+  // Sincronizar tempos acumulados por aplicação se reportados pelo agente
+  if (req.body.appTimes && typeof req.body.appTimes === 'object') {
+    for (const [rawAppName, secs] of Object.entries(req.body.appTimes)) {
+      const lower = rawAppName.toLowerCase();
+      const app = currentState.apps.find((a: any) => a.processName.toLowerCase() === lower);
+      if (app) {
+        app.minutesToday = Math.max(app.minutesToday, Math.floor(Number(secs) / 60));
+      }
+    }
+  }
+
   // Process foreground active app
   let immediateAction: { type: string; process?: string; message?: string } | null = null;
-  const isIdle = idleMs && idleMs > 300000; // > 5 min idle doesn't count
 
-  if (activeProcess && typeof activeProcess === 'string' && !isIdle) {
+  if (activeProcess && typeof activeProcess === 'string' && activeProcess !== 'idle' && !isIdle) {
     const cleanName = activeProcess.replace(/\.exe$/i, '');
     const exeName = `${cleanName}.exe`;
     const category = categorizeProcess(cleanName);
@@ -505,10 +615,17 @@ app.post('/api/report', (req, res) => {
     let app = currentState.apps.find((a: any) => a.processName.toLowerCase() === exeName.toLowerCase());
 
     if (!app) {
+      let displayName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+      if (cleanName.toLowerCase() === 'calculatorapp' || cleanName.toLowerCase() === 'calc') {
+        displayName = 'Calculadora';
+      } else if (activeTitle && activeTitle.length < 35) {
+        displayName = activeTitle;
+      }
+
       app = {
         id: `app-${cleanName.toLowerCase()}`,
         processName: exeName,
-        displayName: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
+        displayName,
         iconType: 'box',
         category,
         minutesToday: 1,
@@ -521,7 +638,11 @@ app.post('/api/report', (req, res) => {
       };
       currentState.apps.push(app);
     } else {
-      app.minutesToday += 1;
+      // Incrementa 10 segundos ao contador interno da app
+      if (!(app as any)._activeSecs) (app as any)._activeSecs = (app.minutesToday || 0) * 60;
+      (app as any)._activeSecs += 10;
+      app.minutesToday = Math.floor((app as any)._activeSecs / 60);
+      if (app.minutesToday === 0) app.minutesToday = 1; // Dá visibilidade de 1m na interface
       app.windowTitle = activeTitle || app.windowTitle;
       app.status = 'running';
       app.lastActiveTime = 'Agora mesmo';
@@ -548,7 +669,48 @@ app.post('/api/report', (req, res) => {
     }
   }
 
-  // Emergency lock check
+  // Verificação de Toque de Recolher (Curfew) e Quota Diária Total de Hoje
+  const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const todayDayIndex = now.getDay();
+  const todayDayId = dayKeys[todayDayIndex];
+  const todayCurfew = currentState.curfewSchedule.find((c: any) => c.dayId === todayDayId) || currentState.curfewSchedule[0];
+
+  const totalMinToday = currentState.agent.screenTimeMinutesToday || 0;
+  const maxAllowedToday = (todayCurfew?.maxMinutes || 210) + (currentState.agent.bonusMinutes || 0);
+
+  if (!immediateAction) {
+    // 1. Se o dia estiver desativado por completo
+    if (todayCurfew && todayCurfew.enabled === false) {
+      immediateAction = {
+        type: 'lock_screen',
+        message: 'O computador está bloqueado hoje por regra parental.',
+      };
+    }
+    // 2. Se a quota máxima do dia foi atingida
+    else if (todayCurfew && totalMinToday >= maxAllowedToday) {
+      immediateAction = {
+        type: 'lock_screen',
+        message: `Limite de tempo diário esgotado (${maxAllowedToday}m). O computador foi bloqueado.`,
+      };
+    }
+    // 3. Se estiver fora do horário permitido (toque de recolher)
+    else if (todayCurfew && todayCurfew.endHour) {
+      const [curfH, curfM] = todayCurfew.endHour.split(':').map(Number);
+      const [startH, startM] = (todayCurfew.startHour || '08:00').split(':').map(Number);
+      const nowMinutes = currentHour * 60 + currentMinute;
+      const curfMinutes = curfH * 60 + curfM;
+      const startMinutes = startH * 60 + startM;
+
+      if (nowMinutes >= curfMinutes || nowMinutes < startMinutes) {
+        immediateAction = {
+          type: 'lock_screen',
+          message: `Toque de recolher ativo (${todayCurfew.endHour}). O ecrã foi bloqueado.`,
+        };
+      }
+    }
+  }
+
+  // Emergency lock check (Pausa Familiar prioritária)
   if (currentState.agent.emergencyLock) {
     immediateAction = {
       type: 'lock_screen',
@@ -809,6 +971,30 @@ app.post('/api/regras', (req, res) => {
   res.json({ ok: true, regras: getFormattedRules() });
 });
 
+// 12b. Gestão de Horários & Toque de Recolher (Curfew)
+app.get('/api/curfew', (req, res) => {
+  res.json({
+    schedule: currentState.curfewSchedule,
+  });
+});
+
+app.post('/api/curfew', (req, res) => {
+  const { schedule, dayId, updates } = req.body;
+  if (Array.isArray(schedule)) {
+    currentState.curfewSchedule = schedule;
+    saveState();
+    return res.json({ ok: true, schedule: currentState.curfewSchedule });
+  }
+  if (dayId && updates) {
+    currentState.curfewSchedule = currentState.curfewSchedule.map((d: any) =>
+      d.dayId === dayId ? { ...d, ...updates } : d
+    );
+    saveState();
+    return res.json({ ok: true, schedule: currentState.curfewSchedule });
+  }
+  res.status(400).json({ ok: false, error: 'Formato de horário inválido' });
+});
+
 // 13. Domínios e Bloqueio Web
 app.get('/api/dominios', (req, res) => {
   const doms = currentState.blockedDomains.map((d: any) => d.domain);
@@ -865,27 +1051,177 @@ app.get('/api/agent/vigia.ps1', (req, res) => {
 $ErrorActionPreference = "SilentlyContinue"
 $ServerUrl = "${serverUrl}"
 
-Add-Type @"
+# 1. Gestao de Instancias e Sessao Interativa
+$myId = $PID
+$myProc = Get-Process -Id $myId -ErrorAction SilentlyContinue
+$mySession = if ($myProc) { $myProc.SessionId } else { 1 }
+
+# Se estiver na Sessao 0 (servico de fundo) e ja existir o desktop interativo do utilizador (explorer.exe),
+# sai imediatamente para dar controlo total ao agente da sessao de utilizador.
+$exp = Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($mySession -eq 0 -and $exp -and $exp.SessionId -gt 0) {
+    exit 0
+}
+
+# Se for a instancia interativa do utilizador, termina quaisquer zombies antigos
+$others = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
+    $_.ProcessId -ne $myId -and ($_.CommandLine -like '*vigia.ps1*' -or $_.CommandLine -like '*SentinelWatcher*') 
+}
+foreach ($o in $others) {
+    try { Stop-Process -Id $o.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+
+# 2. Inicializacao segura da API nativa Win32 (GetForegroundWindow + GetLastInputInfo)
+if (-not ([System.Management.Automation.PSTypeName]'SentinelNativeW').Type) {
+    try {
+        Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class W {
+public class SentinelNativeW {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
   [StructLayout(LayoutKind.Sequential)] public struct LII { public uint cb; public uint t; }
   [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LII i);
-  public static uint IdleMs() { LII i = new LII(); i.cb = (uint)Marshal.SizeOf(i); GetLastInputInfo(ref i); return (uint)Environment.TickCount - i.t; }
-}
-"@
-
-function FgProcess {
-    $h = [W]::GetForegroundWindow()
-    if ($h -eq [IntPtr]::Zero) { return $null }
-    $p = [uint32]0
-    [W]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null
+  public static uint IdleMs() {
     try {
-        $proc = Get-Process -Id $p -ErrorAction Stop
-        return @{ name = "$($proc.ProcessName).exe"; title = $proc.MainWindowTitle }
-    } catch { return $null }
+      LII i = new LII();
+      i.cb = (uint)Marshal.SizeOf(i);
+      if (GetLastInputInfo(ref i)) {
+        return (uint)Environment.TickCount - i.t;
+      }
+      return 0;
+    } catch { return 0; }
+  }
+}
+"@ -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+function Get-ActiveAppInfo {
+    try {
+        if ([System.Management.Automation.PSTypeName]'SentinelNativeW'.Type) {
+            $h = [SentinelNativeW]::GetForegroundWindow()
+            if ($h -ne [IntPtr]::Zero) {
+                $p = [uint32]0
+                [SentinelNativeW]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null
+                if ($p -gt 0) {
+                    $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
+                    if ($proc) {
+                        $pName = $proc.ProcessName
+                        $title = $proc.MainWindowTitle
+
+                        # Tratar ApplicationFrameHost e Calculadora moderna do Windows
+                        if ($pName -eq "ApplicationFrameHost") {
+                            $calc = Get-Process CalculatorApp -ErrorAction SilentlyContinue | Select-Object -First 1
+                            if ($calc) {
+                                $pName = "CalculatorApp"
+                                $title = "Calculadora"
+                            } elseif ($title -match 'Calculadora|Calculator') {
+                                $pName = "CalculatorApp"
+                                $title = "Calculadora"
+                            }
+                        }
+                        if ($pName -match '^(CalculatorApp|calc)$') {
+                            $pName = "CalculatorApp"
+                            if (-not $title) { $title = "Calculadora" }
+                        }
+                        return @{ name = "$pName.exe"; title = if ($title) { $title } else { $pName }; pid = [int]$p }
+                    }
+                }
+            }
+        }
+    } catch {}
+
+    # Fallback se Win32 API estiver limitada: detetar processos de topo
+    try {
+        $calc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(CalculatorApp|calc)$' } | Select-Object -First 1
+        if ($calc) {
+            return @{ name = "CalculatorApp.exe"; title = "Calculadora"; pid = [int]$calc.Id }
+        }
+        $withWindow = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -notmatch '^(explorer|powershell|cmd|taskmgr)$' } | Select-Object -First 1
+        if ($withWindow) {
+            return @{ name = "$($withWindow.ProcessName).exe"; title = if ($withWindow.MainWindowTitle) { $withWindow.MainWindowTitle } else { $withWindow.ProcessName }; pid = [int]$withWindow.Id }
+        }
+    } catch {}
+
+    return $null
+}
+
+function Get-RunningAppsList {
+    $apps = [System.Collections.Generic.List[PSObject]]::new()
+    $seen = @{}
+
+    # Identificar a sessao de desktop do explorador
+    $exp = Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -First 1
+    $targetSession = if ($exp) { $exp.SessionId } else { (Get-Process -Id $PID).SessionId }
+
+    $allProcs = Get-Process -ErrorAction SilentlyContinue
+
+    # Processos de sistema e servicos a ignorar
+    $sysRegex = '^(svchost|csrss|smss|services|lsass|wininit|winlogon|fontdrvhost|dwm|ctfmon|sihost|taskhostw|conhost|RuntimeBroker|SearchHost|StartMenuExperienceHost|ShellExperienceHost|TextInputHost|SecurityHealthSystray|SecurityHealthService|smartscreen|audiodg|spoolsv|wlanext|dasHost|SettingSyncHost|SystemSettingsBroker|explorer|wscript|cscript|powershell|cmd|taskmgr)$'
+
+    # 1. Processos com titulo de janela visivel (qualquer aplicacao aberta pelo utilizador)
+    foreach ($p in $allProcs) {
+        $t = $p.MainWindowTitle
+        if ($t -and $t.Trim() -ne "") {
+            $pName = "$($p.ProcessName).exe"
+            $k = $pName.ToLower()
+            if (-not $seen.ContainsKey($k)) {
+                $seen[$k] = $true
+                $apps.Add(@{
+                    name = $pName
+                    pid = [int]$p.Id
+                    mem_mb = [math]::Round($p.WorkingSet64 / 1MB)
+                    title = $t
+                })
+            }
+        }
+    }
+
+    # 2. Processos ativos na sessao interativa do utilizador (mesmo sem titulo ou minimizados)
+    foreach ($p in $allProcs) {
+        if ($p.SessionId -eq $targetSession -and $p.ProcessName -notmatch $sysRegex) {
+            $pName = "$($p.ProcessName).exe"
+            $k = $pName.ToLower()
+            if (-not $seen.ContainsKey($k)) {
+                $seen[$k] = $true
+                $title = if ($p.MainWindowTitle) { $p.MainWindowTitle } else { $p.ProcessName }
+                if ($p.ProcessName -match '^(CalculatorApp|calc)$') { $title = "Calculadora" }
+                elseif ($p.ProcessName -eq "notepad") { $title = "Bloco de Notas" }
+                elseif ($p.ProcessName -eq "mspaint") { $title = "Paint" }
+                elseif ($p.ProcessName -match 'discord') { $title = "Discord" }
+                elseif ($p.ProcessName -match 'spotify') { $title = "Spotify" }
+                elseif ($p.ProcessName -match 'steam') { $title = "Steam" }
+                elseif ($p.ProcessName -match 'chrome') { $title = "Google Chrome" }
+                elseif ($p.ProcessName -match 'msedge') { $title = "Microsoft Edge" }
+                elseif ($p.ProcessName -match 'firefox') { $title = "Mozilla Firefox" }
+                elseif ($p.ProcessName -match 'brave') { $title = "Brave" }
+                elseif ($p.ProcessName -match 'Roblox') { $title = "Roblox" }
+                elseif ($p.ProcessName -match 'Minecraft|javaw') { $title = "Minecraft" }
+
+                $apps.Add(@{
+                    name = $pName
+                    pid = [int]$p.Id
+                    mem_mb = [math]::Round($p.WorkingSet64 / 1MB)
+                    title = $title
+                })
+            }
+        }
+    }
+
+    # 3. Deteccao garantida para a Calculadora UWP do Windows (CalculatorApp.exe)
+    $calcProc = $allProcs | Where-Object { $_.ProcessName -match '^(CalculatorApp|calc)$' } | Select-Object -First 1
+    if ($calcProc -and -not $seen.ContainsKey("calculatorapp.exe")) {
+        $seen["calculatorapp.exe"] = $true
+        $apps.Add(@{
+            name = "CalculatorApp.exe"
+            pid = [int]$calcProc.Id
+            mem_mb = [math]::Round($calcProc.WorkingSet64 / 1MB)
+            title = "Calculadora"
+        })
+    }
+
+    return $apps
 }
 
 function Show-Alert($msg) {
@@ -894,27 +1230,62 @@ function Show-Alert($msg) {
     } catch {}
 }
 
+# Inicializar ou carregar contador local diario de tempo
+$dailyUsageFile = "$env:ProgramData\\SentinelPC\\daily_usage.json"
+$todayStr = (Get-Date).ToString("yyyy-MM-dd")
+$localUsage = @{ date = $todayStr; activeSeconds = 0; apps = @{} }
+if (Test-Path $dailyUsageFile) {
+    try {
+        $saved = Get-Content $dailyUsageFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+        if ($saved -and $saved.date -eq $todayStr) {
+            $localUsage.activeSeconds = [int]$saved.activeSeconds
+            if ($saved.apps) {
+                foreach ($prop in $saved.apps.PSObject.Properties) {
+                    $localUsage.apps[$prop.Name] = [int]$prop.Value
+                }
+            }
+        }
+    } catch {}
+}
+
 Write-Host "[SentinelPC] Agente em comunicacao continua com $ServerUrl..." -ForegroundColor Cyan
 
 while ($true) {
     try {
-        # 1. Deteta app em primeiro plano e inatividade do teclado/rato
-        $fg = FgProcess
-        $idle = [W]::IdleMs()
+        # 1. Reset diario a meia-noite se a data mudar
+        $currDay = (Get-Date).ToString("yyyy-MM-dd")
+        if ($localUsage.date -ne $currDay) {
+            $localUsage = @{ date = $currDay; activeSeconds = 0; apps = @{} }
+        }
+
+        # 2. Deteta app em primeiro plano e inatividade do teclado/rato
+        $fg = Get-ActiveAppInfo
+        $idle = 0
+        try {
+            if ([System.Management.Automation.PSTypeName]'SentinelNativeW'.Type) {
+                $idle = [SentinelNativeW]::IdleMs()
+            }
+        } catch {}
+
         $activeName = if ($fg) { $fg.name } else { "idle" }
         $activeTitle = if ($fg) { $fg.title } else { "" }
 
-        # 2. Lista de processos visíveis
-        $procs = @(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -Unique ProcessName, Id, WorkingSet64, MainWindowTitle | ForEach-Object {
-            @{
-                name = "$($_.ProcessName).exe"
-                pid = [int]$_.Id
-                mem_mb = [math]::Round($_.WorkingSet64 / 1MB)
-                title = $_.MainWindowTitle
+        # Se houve atividade do utilizador nos ultimos 5 minutos (< 300.000ms), acumula tempo ativo
+        if ($idle -lt 300000) {
+            $localUsage.activeSeconds += 10
+            if ($activeName -and $activeName -ne "idle") {
+                if (-not $localUsage.apps[$activeName]) { $localUsage.apps[$activeName] = 0 }
+                $localUsage.apps[$activeName] += 10
             }
-        })
+            try {
+                $localUsage | ConvertTo-Json -Compress | Set-Content $dailyUsageFile -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
 
-        # 3. Métricas de Hardware
+        # 3. Lista completa de programas e processos abertos
+        $procs = @(Get-RunningAppsList)
+
+        # 4. Metricas de Hardware
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
         $cpu = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Measure-Object -Property LoadPercentage -Average).Average
         $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
@@ -928,13 +1299,15 @@ while ($true) {
             uptimeSeconds = if ($os) { [int]((Get-Date) - $os.LastBootUpTime).TotalSeconds } else { 3600 }
         }
 
-        # 4. Envia telemetria via HTTP REST para o servidor do pai
+        # 5. Envia telemetria via HTTP REST para o servidor
         $body = @{
             targetMachine = $env:COMPUTERNAME
             targetUser = $env:USERNAME
             activeProcess = $activeName
             activeTitle = $activeTitle
             idleMs = [int]$idle
+            activeSecondsToday = [int]$localUsage.activeSeconds
+            appTimes = $localUsage.apps
             runningProcesses = $procs
             hardware = $hw
             osVersion = if ($os) { $os.Caption } else { "Windows 11" }
@@ -942,7 +1315,7 @@ while ($true) {
 
         $res = Invoke-RestMethod -Uri "$ServerUrl/api/report" -Method Post -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec 8
 
-        # 5. Executa Ações Imediatas e Fila de Comandos recebidos do servidor
+        # 6. Executa Acoes Imediatas e Fila de Comandos recebidos do servidor
         if ($res.action) {
             if ($res.action.type -eq "kill" -and $res.action.process) {
                 $pName = ($res.action.process -replace '\.exe$','')
@@ -994,7 +1367,8 @@ app.get('/api/agent/install.ps1', (req, res) => {
   const serverUrl = `${protocol}://${host}`;
 
   const script = `# ================================================================
-# SentinelPC - Instalador do Agente Cliente Windows
+# SentinelPC - Instalador do Agente Cliente Windows Nativo
+# Servidor Central: ${serverUrl}
 # ================================================================
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " [SentinelPC] A instalar o Agente de Comunicacao HTTP no Windows... " -ForegroundColor Cyan
@@ -1003,22 +1377,69 @@ Write-Host "================================================================" -F
 $d = "$env:ProgramData\\SentinelPC"
 if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 
-# Adiciona exclusao no Windows Defender para a pasta do agente
+# 1. Adiciona exclusao no Windows Defender para a pasta do agente
 try { Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue } catch {}
 
+# 2. Descarrega script vigia.ps1 do servidor
 $vigiaPath = "$d\\vigia.ps1"
-Write-Host "[1/3] A descarregar script vigia.ps1 de ${serverUrl}..."
+Write-Host "[1/4] A descarregar script vigia.ps1 de ${serverUrl}..."
 Invoke-WebRequest -Uri "${serverUrl}/api/agent/vigia.ps1" -OutFile $vigiaPath -UseBasicParsing
 
-Write-Host "[2/3] A registar Tarefa Agendada no Windows (SentinelWatcher)..."
-$action = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '$vigiaPath'"
-schtasks /create /tn "SentinelWatcher" /tr $action /sc onlogon /f | Out-Null
+# 3. Cria atalhos nativos (.lnk) nas pastas Startup do Windows (All Users & Current User)
+Write-Host "[2/4] A configurar arranque automatico no login (Startup Shortcuts)..."
+try {
+    $WshShell = New-Object -ComObject WScript.Shell
+    $scArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $vigiaPath + '"'
 
-Write-Host "[3/3] A iniciar o agente imediatamente em segundo plano..."
-schtasks /run /tn "SentinelWatcher" | Out-Null
+    # Startup Comum (All Users)
+    $startupAll = "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    if (Test-Path $startupAll) {
+        $scAll = $WshShell.CreateShortcut("$startupAll\\SentinelPC.lnk")
+        $scAll.TargetPath = "powershell.exe"
+        $scAll.Arguments = $scArgs
+        $scAll.WindowStyle = 7
+        $scAll.Description = "SentinelPC Agente de Monitorizacao"
+        $scAll.Save()
+    }
+
+    # Startup do Utilizador Atual
+    $userStartup = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    if (Test-Path $userStartup) {
+        $scUser = $WshShell.CreateShortcut("$userStartup\\SentinelPC.lnk")
+        $scUser.TargetPath = "powershell.exe"
+        $scUser.Arguments = $scArgs
+        $scUser.WindowStyle = 7
+        $scUser.Description = "SentinelPC Agente de Monitorizacao"
+        $scUser.Save()
+    }
+} catch {}
+
+# 4. Regista no Windows Registry Run (HKLM e HKCU para redundancia total)
+Write-Host "[3/4] A registar arranque no Registry do Windows (HKLM & HKCU Run)..."
+try {
+    $runCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $vigiaPath + '"'
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+
+# 5. Regista Tarefa Agendada no Windows ao iniciar sessao
+try {
+    $taskTr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $vigiaPath + '\"'
+    schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /f | Out-Null
+} catch {}
+
+# 6. Termina eventuais processos antigos ou bloqueados
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
+    $_.CommandLine -like '*vigia.ps1*' -or $_.CommandLine -like '*SentinelWatcher*' 
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# 7. Iniciar imediatamente no desktop atual
+Write-Host "[4/4] A iniciar o agente imediatamente no ambiente de trabalho..."
+Start-Process powershell.exe -ArgumentList $scArgs
 
 Write-Host ""
-Write-Host "[✓] Agente instalado com sucesso! A telemetria esta ativa e a reportar para o servidor." -ForegroundColor Green
+Write-Host "[✓] Agente instalado com sucesso e associado ao login do Windows!" -ForegroundColor Green
+Write-Host "[✓] O agente arranca automaticamente ao fazer login e monitoriza todas as aplicacoes." -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Cyan
 `;
 
@@ -1032,9 +1453,14 @@ app.get('/api/agent/uninstall.ps1', (req, res) => {
 # SentinelPC - Desinstalador do Agente Windows
 # ================================================================
 schtasks /delete /tn "SentinelWatcher" /f -ErrorAction SilentlyContinue | Out-Null
-Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*vigia.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Remove-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -ErrorAction SilentlyContinue
+Remove-Item "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SentinelPC.lnk" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SentinelPC.lnk" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SentinelWatcher.vbs" -Force -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*vigia.ps1*' -or $_.CommandLine -like '*SentinelWatcher*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Remove-Item -Path "$env:ProgramData\\SentinelPC" -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "[✓] SentinelPC desinstalado do computador." -ForegroundColor Yellow
+Write-Host "[✓] SentinelPC desinstalado completamente do computador." -ForegroundColor Yellow
 `;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(script);

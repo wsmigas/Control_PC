@@ -104,9 +104,11 @@ export const AdminTab: React.FC<AdminTabProps> = ({
   const [autoReloadCountdown, setAutoReloadCountdown] = useState<number | null>(null);
   const terminalLogEndRef = useRef<HTMLDivElement>(null);
 
+  const serverProto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
   const serverHost = typeof window !== 'undefined' && window.location.host ? window.location.host : `${window.location.hostname || '192.168.1.100'}:3000`;
+  const installCmdUrl = `${serverProto}//${serverHost}/api/agent/install.ps1`;
   const manualPsCommand = `# Comando de Linha Única para PowerShell (Executar como Administrador no PC do Filho):
-irm http://${serverHost}/api/agent/install.ps1 | iex`;
+irm ${installCmdUrl} | iex`;
 
   const githubCliCommand = `bash /opt/control_pc/update_from_github.sh || (cd /opt/control_pc && git fetch origin main && git reset --hard origin/main && npm install --legacy-peer-deps && npm run build && systemctl restart control_pc)`;
 
@@ -953,14 +955,14 @@ irm http://${serverHost}/api/agent/install.ps1 | iex`;
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(`irm http://${serverHost}/api/agent/install.ps1 | iex`, 'modal-ps')}
+                    onClick={() => copyToClipboard(`irm ${installCmdUrl} | iex`, 'modal-ps')}
                     className="hover:text-cyan-300 text-slate-400 text-xs cursor-pointer"
                   >
                     {copiedCmd === 'modal-ps' ? 'Copiado!' : 'Copiar'}
                   </button>
                 </div>
                 <pre className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-cyan-300 select-all overflow-x-auto">
-                  irm http://{serverHost}/api/agent/install.ps1 | iex
+                  irm {installCmdUrl} | iex
                 </pre>
               </div>
 

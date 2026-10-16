@@ -40,8 +40,9 @@ export const ConnectAgentModal: React.FC<ConnectAgentModalProps> = ({
 
   if (!isOpen) return null;
 
+  const serverProto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
   const serverHost = typeof window !== 'undefined' ? window.location.host : 'IP_DO_PAI:3000';
-  const installCmd = `irm http://${serverHost}/api/agent/install.ps1 | iex`;
+  const installCmd = `irm ${serverProto}//${serverHost}/api/agent/install.ps1 | iex`;
 
   const handleProbe = async () => {
     setIsProbing(true);
