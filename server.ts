@@ -774,7 +774,10 @@ app.post('/api/report', (req, res) => {
     action: immediateAction,
     pendingActions: pending,
     regras: getFormattedRules(),
-    dominios: currentState.blockedDomains.filter((d: any) => d.active).map((d: any) => d.domain),
+    dominios: (currentState.blockedDomains || [])
+      .filter((d: any) => d.active && d.domain)
+      .map((d: any) => d.domain.trim().toLowerCase().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/^\*\./, ''))
+      .filter(Boolean),
     emergencyLock: currentState.agent.emergencyLock,
   });
 });
@@ -1156,29 +1159,58 @@ app.post('/api/curfew', (req, res) => {
 
 // 13. Domínios e Bloqueio Web
 app.get('/api/dominios', (req, res) => {
-  const doms = currentState.blockedDomains.map((d: any) => d.domain);
-  res.json({ dominios: doms });
+  const activeDoms = (currentState.blockedDomains || [])
+    .filter((d: any) => d.active)
+    .map((d: any) => d.domain);
+  res.json({
+    dominios: activeDoms,
+    blockedDomains: currentState.blockedDomains || [],
+  });
 });
 
 app.post('/api/dominios', (req, res) => {
-  const { dominios } = req.body;
-  if (!Array.isArray(dominios)) {
+  const { dominios, domains } = req.body;
+
+  if (Array.isArray(domains)) {
+    currentState.blockedDomains = domains.map((d: any, i: number) => ({
+      id: d.id || `dom-${i + 1}`,
+      domain: (d.domain || '').trim().toLowerCase().replace(/^https?:\/\//i, '').replace(/\/.*$/, ''),
+      category: d.category || 'Filtro Web',
+      active: d.active !== false,
+      hitsToday: d.hitsToday || 0,
+      addedDate: d.addedDate || new Date().toISOString().split('T')[0],
+      isWildcard: d.isWildcard || (d.domain || '').startsWith('*.'),
+    })).filter((d: any) => d.domain.length > 2);
+  } else if (Array.isArray(dominios)) {
+    const unique = Array.from(new Set(dominios.map((d: string) => d.trim().toLowerCase().replace(/^https?:\/\//i, '').replace(/\/.*$/, '')).filter(Boolean)));
+    currentState.blockedDomains = unique.map((dom: string, i: number) => ({
+      id: `dom-${i + 1}`,
+      domain: dom,
+      category: dom.includes('youtube') ? 'Vídeo / Streaming' : dom.includes('tiktok') || dom.includes('instagram') ? 'Redes Sociais' : 'Filtro Web',
+      active: true,
+      hitsToday: 0,
+      addedDate: new Date().toISOString().split('T')[0],
+      isWildcard: dom.startsWith('*.'),
+    }));
+  } else {
     return res.status(400).json({ error: 'Lista de domínios inválida' });
   }
 
-  const unique = Array.from(new Set(dominios.map((d: string) => d.trim().toLowerCase()).filter(Boolean)));
-  currentState.blockedDomains = unique.map((dom: string, i: number) => ({
-    id: `dom-${i + 1}`,
-    domain: dom,
-    category: dom.includes('youtube') ? 'Vídeo / Streaming' : dom.includes('tiktok') ? 'Redes Sociais' : 'Filtro Web',
-    active: true,
-    hitsToday: 0,
-    addedDate: new Date().toISOString().split('T')[0],
-    isWildcard: dom.startsWith('*.'),
-  }));
+  const activeCount = currentState.blockedDomains.filter((d: any) => d.active).length;
+  currentState.logs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toLocaleTimeString('pt-PT'),
+    type: 'alert',
+    message: `Filtro Web atualizado: ${activeCount} domínio(s) ativo(s) para bloqueio no Windows.`,
+    source: 'dashboard',
+  });
 
   saveState();
-  res.json({ ok: true, dominios: unique });
+  res.json({
+    ok: true,
+    dominios: currentState.blockedDomains.filter((d: any) => d.active).map((d: any) => d.domain),
+    blockedDomains: currentState.blockedDomains,
+  });
 });
 
 // 14. Estado de Hardware
@@ -1392,6 +1424,94 @@ function Show-Alert($msg) {
     } catch {}
 }
 
+$global:lastAppliedDomsSig = ""
+function Update-WebFilterHosts($dominiosList) {
+    try {
+        $cleanDoms = @($dominiosList | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
+        $sig = ($cleanDoms -join ",")
+        if ($global:lastAppliedDomsSig -eq $sig) { return }
+
+        $hostsPath = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
+        if (-not (Test-Path $hostsPath)) {
+            try { New-Item -ItemType File -Path $hostsPath -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+        }
+
+        # Desmarca atributo ReadOnly se existir e garante permissões
+        try {
+            $fItem = Get-Item $hostsPath -Force -ErrorAction SilentlyContinue
+            if ($fItem.IsReadOnly) { $fItem.IsReadOnly = $false }
+            icacls $hostsPath /grant "*S-1-5-32-545:(M)" /Q | Out-Null
+        } catch {}
+
+        # Le conteudo atual do ficheiro hosts
+        $raw = Get-Content -Path $hostsPath -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $raw) { $raw = "" }
+
+        # Remove bloco anterior do SentinelPC se existir
+        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?'
+        $cleaned = [regex]::Replace($raw, $pattern, '')
+
+        $newBlock = ""
+        if ($cleanDoms.Count -gt 0) {
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
+            $seen = @{}
+
+            foreach ($d in $cleanDoms) {
+                $rawDom = $d.Trim()
+                if ($rawDom.Length -lt 3) { continue }
+
+                $variants = [System.Collections.Generic.List[string]]::new()
+                $variants.Add($rawDom)
+                if (-not $rawDom.StartsWith("www.")) {
+                    $variants.Add("www.$rawDom")
+                } else {
+                    $variants.Add($rawDom.Substring(4))
+                }
+
+                if ($rawDom -like "*youtube*") {
+                    $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"))
+                }
+                if ($rawDom -like "*tiktok*") {
+                    $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "byteoversea.com", "ibytedtos.com"))
+                }
+                if ($rawDom -like "*instagram*") {
+                    $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com"))
+                }
+                if ($rawDom -like "*facebook*") {
+                    $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com"))
+                }
+                if ($rawDom -like "*roblox*") {
+                    $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com"))
+                }
+
+                foreach ($v in $variants) {
+                    $vLow = $v.ToLower()
+                    if (-not $seen.ContainsKey($vLow)) {
+                        $seen[$vLow] = $true
+                        $lines.Add("0.0.0.0 $vLow")
+                        $lines.Add("127.0.0.1 $vLow")
+                    }
+                }
+            }
+
+            $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL FIM ---")
+            $newBlock = [string]::Join([Environment]::NewLine, $lines)
+        }
+
+        $nl = [Environment]::NewLine
+        $merged = ($cleaned.TrimEnd() + $nl + $nl + $newBlock).Trim() + $nl
+        [System.IO.File]::WriteAllText($hostsPath, $merged, [System.Text.Encoding]::ASCII)
+
+        # Esvazia a cache de DNS do Windows imediatamente
+        try { Clear-DnsClientCache -ErrorAction SilentlyContinue } catch {}
+        try { ipconfig /flushdns | Out-Null } catch {}
+
+        $global:lastAppliedDomsSig = $sig
+        Write-Host "[SentinelPC] Filtro Web: $($cleanDoms.Count) dominios injetados no ficheiro hosts com sucesso." -ForegroundColor Green
+    } catch {}
+}
+
 # Inicializar ou carregar contador local diario de tempo
 $dailyUsageFile = "$env:ProgramData\\SentinelPC\\daily_usage.json"
 $todayStr = (Get-Date).ToString("yyyy-MM-dd")
@@ -1520,6 +1640,61 @@ while ($true) {
             }
         }
 
+        # 6c. Execucao e Intercecao Ativa do Filtro Web no Windows
+        if ($res.dominios) {
+            Update-WebFilterHosts $res.dominios
+
+            if ($res.dominios.Count -gt 0) {
+                $domKeywords = [System.Collections.Generic.List[string]]::new()
+                foreach ($d in $res.dominios) {
+                    $dRaw = $d.Replace('*.', '').Trim().ToLower()
+                    $dClean = ($dRaw -replace '\.(com|pt|org|net|io|tv|gg|be|app|es|br|co|uk|xyz|online|de|fr)$', '').Trim()
+                    if ($dClean.Length -ge 3 -and -not $domKeywords.Contains($dClean)) {
+                        $domKeywords.Add($dClean)
+                    }
+                    if (-not $domKeywords.Contains($dRaw)) {
+                        $domKeywords.Add($dRaw)
+                    }
+                }
+
+                # Deteta janelas de browsers abertos com o site bloqueado no titulo
+                $browserRegex = '^(chrome|msedge|firefox|brave|opera|vivaldi)$'
+                $openBrowsers = Get-Process -ErrorAction SilentlyContinue | Where-Object { 
+                    $_.ProcessName -match $browserRegex -and $_.MainWindowTitle 
+                }
+
+                foreach ($bProc in $openBrowsers) {
+                    $winTitle = $bProc.MainWindowTitle.ToLower()
+                    $matchedKw = $null
+                    foreach ($kw in $domKeywords) {
+                        if ($winTitle -match [regex]::Escape($kw)) {
+                            $matchedKw = $kw
+                            break
+                        }
+                    }
+
+                    if ($matchedKw) {
+                        # Fecha imediatamente o separador ou janela no navegador
+                        try {
+                            $wsh = New-Object -ComObject WScript.Shell
+                            if ($fg -and $fg.pid -eq $bProc.Id) {
+                                $wsh.SendKeys('^w')
+                                Start-Sleep -Milliseconds 80
+                                $wsh.SendKeys('^w')
+                            } else {
+                                if ($wsh.AppActivate($bProc.Id)) {
+                                    Start-Sleep -Milliseconds 60
+                                    $wsh.SendKeys('^w')
+                                }
+                            }
+                        } catch {}
+
+                        Show-Alert "O site '$matchedKw' foi bloqueado pelo Controlo Parental SentinelPC."
+                    }
+                }
+            }
+        }
+
         if ($res.pendingActions -and $res.pendingActions.Count -gt 0) {
             foreach ($act in $res.pendingActions) {
                 if ($act.type -eq "kill" -and $act.pid) {
@@ -1577,6 +1752,24 @@ if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Nu
 # 1. Adiciona exclusao no Windows Defender para a pasta do agente
 try { Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue } catch {}
 
+# 1b. Configura permissoes de escrita no ficheiro hosts e desativa DNS-over-HTTPS
+try {
+    $hostsFile = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
+    if (Test-Path $hostsFile) {
+        $item = Get-Item $hostsFile -Force -ErrorAction SilentlyContinue
+        if ($item.IsReadOnly) { $item.IsReadOnly = $false }
+        icacls $hostsFile /grant "*S-1-5-32-545:(M)" /Q | Out-Null
+    }
+
+    # Desativa DNS-over-HTTPS no Chrome, Edge e Brave para que respeitem o ficheiro hosts local
+    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+
 # 2. Descarrega script vigia.ps1 do servidor
 $vigiaPath = "$d\\vigia.ps1"
 Write-Host "[1/4] A descarregar script vigia.ps1 de ${serverUrl}..."
@@ -1619,10 +1812,10 @@ try {
     Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-# 5. Regista Tarefa Agendada no Windows ao iniciar sessao
+# 5. Regista Tarefa Agendada no Windows ao iniciar sessao (com privilegios elevados)
 try {
     $taskTr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $vigiaPath + '\"'
-    schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /f | Out-Null
+    schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /rl highest /f | Out-Null
 } catch {}
 
 # 6. Termina eventuais processos antigos ou bloqueados
@@ -1656,8 +1849,20 @@ Remove-Item "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup
 Remove-Item "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SentinelPC.lnk" -Force -ErrorAction SilentlyContinue
 Remove-Item "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SentinelWatcher.vbs" -Force -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*vigia.ps1*' -or $_.CommandLine -like '*SentinelWatcher*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+try {
+    $hostsPath = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
+    if (Test-Path $hostsPath) {
+        $raw = Get-Content -Path $hostsPath -Raw -ErrorAction SilentlyContinue
+        if ($raw) {
+            $cleaned = [regex]::Replace($raw, '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
+            [System.IO.File]::WriteAllText($hostsPath, $cleaned.TrimEnd() + [Environment]::NewLine, [System.Text.Encoding]::ASCII)
+            Clear-DnsClientCache -ErrorAction SilentlyContinue
+            ipconfig /flushdns | Out-Null
+        }
+    }
+} catch {}
 Remove-Item -Path "$env:ProgramData\\SentinelPC" -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "[✓] SentinelPC desinstalado completamente do computador." -ForegroundColor Yellow
+Write-Host "[✓] SentinelPC desinstalado completamente do computador e regras de hosts limpas." -ForegroundColor Yellow
 `;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(script);

@@ -113,6 +113,9 @@ export default function App() {
             if (Array.isArray(data.curfewSchedule) && data.curfewSchedule.length > 0) {
               setCurfewSchedule(data.curfewSchedule);
             }
+            if (Array.isArray(data.blockedDomains) && data.blockedDomains.length > 0) {
+              setBlockedDomains(data.blockedDomains);
+            }
           }
         }
       } catch {
@@ -421,28 +424,107 @@ export default function App() {
     }
   };
 
-  const handleToggleDomain = (domainId: string) => {
-    setBlockedDomains((prev) =>
-      prev.map((d) => (d.id === domainId ? { ...d, active: !d.active } : d))
+  const handleToggleDomain = async (domainId: string) => {
+    const updated = blockedDomains.map((d) =>
+      d.id === domainId ? { ...d, active: !d.active } : d
     );
+    setBlockedDomains(updated);
+    const target = updated.find((d) => d.id === domainId);
+    showToast(target?.active ? `Bloqueio de ${target.domain} ativado.` : `Bloqueio de ${target?.domain} pausado.`, 'info');
+    try {
+      await fetch('/api/dominios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: updated }),
+      });
+    } catch {
+      // offline fallback
+    }
   };
 
-  const handleDeleteDomain = (domainId: string) => {
-    setBlockedDomains((prev) => prev.filter((d) => d.id !== domainId));
+  const handleDeleteDomain = async (domainId: string) => {
+    const updated = blockedDomains.filter((d) => d.id !== domainId);
+    setBlockedDomains(updated);
     showToast('Domínio removido da lista de bloqueio.', 'info');
+    try {
+      await fetch('/api/dominios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: updated }),
+      });
+    } catch {
+      // offline fallback
+    }
   };
 
-  const handleAddDomain = (domain: string, category: string) => {
+  const handleAddDomain = async (domain: string, category: string, isWildcard?: boolean) => {
+    const clean = domain.trim().toLowerCase().replace(/^https?:\/\//i, '').split('/')[0].split('?')[0];
+    if (!clean) return;
+
     const newEntry: BlockedDomain = {
-      id: `dom-${Date.now()}`,
-      domain,
+      id: `dom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      domain: clean,
       category,
       active: true,
       hitsToday: 0,
       addedDate: new Date().toISOString().split('T')[0],
+      isWildcard: isWildcard || clean.startsWith('*.'),
     };
-    setBlockedDomains((prev) => [newEntry, ...prev]);
-    showToast(`Domínio ${domain} adicionado ao bloqueio de hosts.`, 'success');
+
+    const updated = [newEntry, ...blockedDomains.filter((d) => d.domain.toLowerCase() !== clean.toLowerCase())];
+    setBlockedDomains(updated);
+    showToast(`Domínio ${clean} adicionado ao bloqueio do Windows.`, 'success');
+
+    try {
+      await fetch('/api/dominios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: updated }),
+      });
+    } catch {
+      // offline fallback
+    }
+  };
+
+  const handleAddDomains = async (items: { domain: string; category: string; isWildcard?: boolean }[]) => {
+    if (!items || items.length === 0) return;
+    const existing = new Set(blockedDomains.map((d) => d.domain.toLowerCase()));
+    const newEntries: BlockedDomain[] = [];
+
+    for (const item of items) {
+      const clean = item.domain.trim().toLowerCase().replace(/^https?:\/\//i, '').split('/')[0].split('?')[0];
+      if (clean && !existing.has(clean)) {
+        existing.add(clean);
+        newEntries.push({
+          id: `dom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          domain: clean,
+          category: item.category,
+          active: true,
+          hitsToday: 0,
+          addedDate: new Date().toISOString().split('T')[0],
+          isWildcard: item.isWildcard || clean.startsWith('*.'),
+        });
+      }
+    }
+
+    if (newEntries.length === 0) {
+      showToast('Todos os domínios já se encontram na lista de bloqueio.', 'info');
+      return;
+    }
+
+    const updated = [...newEntries, ...blockedDomains];
+    setBlockedDomains(updated);
+    showToast(`${newEntries.length} domínio(s) adicionado(s) ao bloqueio do Windows.`, 'success');
+
+    try {
+      await fetch('/api/dominios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: updated }),
+      });
+    } catch {
+      // offline fallback
+    }
   };
 
   const handleAddCustomApp = async (newApp: Omit<AppUsageRecord, 'id'>) => {
@@ -778,6 +860,7 @@ export default function App() {
             onToggleDomain={handleToggleDomain}
             onDeleteDomain={handleDeleteDomain}
             onAddDomain={handleAddDomain}
+            onAddDomains={handleAddDomains}
           />
         )}
 

@@ -208,10 +208,30 @@ export function generateRegrasJson(apps: AppUsageRecord[], curfew: CurfewDaySche
 // Generates the hosts file block matching the patch
 export function generateHostsBlock(blockedDomains: BlockedDomain[]): string {
   const active = blockedDomains.filter((d) => d.active);
-  const lines = [
+  const entries: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of active) {
+    let d = item.domain.trim().toLowerCase();
+    d = d.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/.*$/, '');
+    const cleanRoot = d.replace(/^\*\./, '');
+    if (cleanRoot.length < 3) continue;
+
+    const variants = [cleanRoot, `www.${cleanRoot}`];
+    if (d.startsWith('*.')) {
+      variants.push(`m.${cleanRoot}`, `mobile.${cleanRoot}`, `api.${cleanRoot}`);
+    }
+    for (const v of variants) {
+      if (!seen.has(v)) {
+        seen.add(v);
+        entries.push(`0.0.0.0 ${v}`);
+      }
+    }
+  }
+
+  return [
     '# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---',
-    ...active.map((d) => `0.0.0.0 ${d.domain}\n0.0.0.0 www.${d.domain}`),
+    ...entries,
     '# --- SENTINELPC BLOQUEIO PARENTAL FIM ---',
-  ];
-  return lines.join('\n');
+  ].join('\n');
 }

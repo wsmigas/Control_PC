@@ -20,6 +20,7 @@ interface WebFilterTabProps {
   onToggleDomain: (domainId: string) => void;
   onDeleteDomain: (domainId: string) => void;
   onAddDomain: (domain: string, category: string, isWildcard?: boolean) => void;
+  onAddDomains?: (items: { domain: string; category: string; isWildcard?: boolean }[]) => void;
 }
 
 export const WebFilterTab: React.FC<WebFilterTabProps> = ({
@@ -27,6 +28,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
   onToggleDomain,
   onDeleteDomain,
   onAddDomain,
+  onAddDomains,
 }) => {
   const [newDomain, setNewDomain] = useState('');
   const [newCategory, setNewCategory] = useState('Redes Sociais');
@@ -35,6 +37,7 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
 
   const YT_PRESET = [
     '*.youtube.com',
+    'youtube.com',
     'm.youtube.com',
     'music.youtube.com',
     'studio.youtube.com',
@@ -43,6 +46,29 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
     'youtubei.googleapis.com',
     '*.ytimg.com',
     '*.googlevideo.com',
+  ];
+
+  const TIKTOK_PRESET = [
+    'tiktok.com',
+    '*.tiktok.com',
+    'm.tiktok.com',
+    'v16.tiktokcdn.com',
+    'byteoversea.com',
+  ];
+
+  const ROBLOX_PRESET = [
+    'roblox.com',
+    '*.roblox.com',
+    'web.roblox.com',
+    'api.roblox.com',
+  ];
+
+  const SOCIAL_PRESET = [
+    'instagram.com',
+    '*.instagram.com',
+    'facebook.com',
+    '*.facebook.com',
+    'threads.net',
   ];
 
   const hostsBlock = generateHostsBlock(domains);
@@ -67,12 +93,24 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
     setIncludeWildcard(false);
   };
 
-  const handleAddPresetYoutube = () => {
-    YT_PRESET.forEach((dom) => {
-      if (!domains.some((d) => d.domain === dom)) {
-        onAddDomain(dom, 'Vídeo & Streaming', dom.startsWith('*.'));
-      }
-    });
+  const handleAddPreset = (presetList: string[], category: string) => {
+    const toAdd = presetList
+      .filter((dom) => !domains.some((d) => d.domain.toLowerCase() === dom.toLowerCase()))
+      .map((dom) => ({
+        domain: dom,
+        category,
+        isWildcard: dom.startsWith('*.'),
+      }));
+
+    if (toAdd.length === 0) return;
+
+    if (onAddDomains) {
+      onAddDomains(toAdd);
+    } else {
+      toAdd.forEach((item) => {
+        onAddDomain(item.domain, item.category, item.isWildcard);
+      });
+    }
   };
 
   const handleCopyHosts = () => {
@@ -113,18 +151,48 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
         <div className="lg:col-span-7 space-y-4">
           {/* Add form */}
           <div className="rounded-xl border border-slate-800 bg-[#0E131F] p-4 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Bloquear Sites no PC Dele
+                Bloquear Sites no Computador
               </h4>
-              <button
-                type="button"
-                onClick={handleAddPresetYoutube}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-red-950/60 hover:bg-red-900 border border-red-500/40 text-red-300 transition-colors cursor-pointer"
-              >
-                <Sparkles className="h-3 w-3" />
-                <span>+ Todos os Endereços do YouTube</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleAddPreset(YT_PRESET, 'Vídeo & Streaming')}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-red-950/60 hover:bg-red-900 border border-red-500/40 text-red-300 transition-colors cursor-pointer"
+                  title="Bloquear todos os endereços do YouTube"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>+ YouTube</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddPreset(TIKTOK_PRESET, 'Redes Sociais')}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-pink-950/60 hover:bg-pink-900 border border-pink-500/40 text-pink-300 transition-colors cursor-pointer"
+                  title="Bloquear TikTok"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>+ TikTok</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddPreset(ROBLOX_PRESET, 'Jogos / Servidores')}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-amber-950/60 hover:bg-amber-900 border border-amber-500/40 text-amber-300 transition-colors cursor-pointer"
+                  title="Bloquear Roblox"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>+ Roblox</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddPreset(SOCIAL_PRESET, 'Redes Sociais')}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-purple-950/60 hover:bg-purple-900 border border-purple-500/40 text-purple-300 transition-colors cursor-pointer"
+                  title="Bloquear Instagram e Facebook"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>+ Redes Sociais</span>
+                </button>
+              </div>
             </div>
 
             <form onSubmit={handleAdd} className="space-y-2.5">
