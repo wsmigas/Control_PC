@@ -418,7 +418,7 @@ app.post('/api/report', (req, res) => {
     } else {
       // If default placeholder 'pc1' has never connected, adopt it for the first reporting machine
       const defaultPc = currentState.pcs['pc1'];
-      if (defaultPc && defaultPc.lastSeen === 'A aguardar primeira conexão' && !defaultPc.isOnline && Object.keys(currentState.pcs).length === 1) {
+      if (defaultPc && (defaultPc.lastSeen === 'A aguardar primeira conexão' || defaultPc.lastSeen === 'Nunca' || !defaultPc.lastSeenTs) && !defaultPc.isOnline && Object.keys(currentState.pcs).length === 1) {
         pid = 'pc1';
         activePc = defaultPc;
         activePc.nome = targetMachine || 'PC Principal';
@@ -474,14 +474,16 @@ app.post('/api/report', (req, res) => {
     activePc.host = cleanClientIp;
   }
 
-  // If this is the active PC or none is set, sync agent state
-  if (currentState.ativo === pid || !currentState.ativo) {
+  // Se o PC ativo atual estiver offline ou não existir, e este PC reportar agora com sucesso, ativa-o no dashboard!
+  const currentAtivo = currentState.pcs[currentState.ativo];
+  if (!currentState.ativo || !currentAtivo || !currentAtivo.isOnline || currentState.ativo === pid) {
     currentState.ativo = pid;
     currentState.agent.targetMachine = activePc.nome;
     currentState.agent.targetUser = activePc.target_user;
     currentState.agent.ipAddress = activePc.host;
     currentState.agent.connectionMethod = activePc.connectionMethod || 'agent_poll';
   }
+  console.log(`[HTTP /api/report] Recebido heartbeat de ${targetMachine || 'PC'} (${targetUser || ''} @ ${cleanClientIp}) -> PC: ${activePc.nome} [${pid}] ONLINE`);
 
   currentState.isRealData = true;
   currentState.agent.lastSyncTime = 'Agora mesmo';
@@ -1239,22 +1241,38 @@ app.get('/api/agent/vigia.ps1', (req, res) => {
 # SentinelPC - Agente Cliente Windows Nativo (vigia.ps1)
 # Servidor Central: ${serverUrl}
 # ================================================================
-$ErrorActionPreference = "SilentlyContinue"
-$ServerUrl = "${serverUrl}"
+param(
+    [string]$Server = ""
+)
 
-# 1. Gestao de Instancias e Sessao Interativa
+# 1. Ativa protocolos TLS 1.2 e TLS 1.3 para ligacoes HTTPS seguras
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+} catch {}
+
+$ServerUrl = "${serverUrl}"
+if ($Server -and $Server.Trim() -ne "") {
+    $ServerUrl = $Server.Trim().TrimEnd('/')
+}
+
+# Permite override por ficheiro local config.json se existir
+$cfgFile = "$env:ProgramData\\SentinelPC\\config.json"
+if (Test-Path $cfgFile) {
+    try {
+        $cfg = Get-Content $cfgFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+        if ($cfg -and $cfg.serverUrl) {
+            $ServerUrl = $cfg.serverUrl.Trim().TrimEnd('/')
+        }
+    } catch {}
+}
+
+# 2. Gestao de Instancias e Sessao Interativa
 $myId = $PID
 $myProc = Get-Process -Id $myId -ErrorAction SilentlyContinue
 $mySession = if ($myProc) { $myProc.SessionId } else { 1 }
 
-# Se estiver na Sessao 0 (servico de fundo) e ja existir o desktop interativo do utilizador (explorer.exe),
-# sai imediatamente para dar controlo total ao agente da sessao de utilizador.
-$exp = Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($mySession -eq 0 -and $exp -and $exp.SessionId -gt 0) {
-    exit 0
-}
-
-# Se for a instancia interativa do utilizador, termina quaisquer zombies antigos
+# Termina zombies antigos da mesma sessao se existirem
 $others = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
     $_.ProcessId -ne $myId -and ($_.CommandLine -like '*vigia.ps1*' -or $_.CommandLine -like '*SentinelWatcher*') 
 }
@@ -1530,7 +1548,12 @@ if (Test-Path $dailyUsageFile) {
     } catch {}
 }
 
-Write-Host "[SentinelPC] Agente em comunicacao continua a cada 3 segundos com $ServerUrl..." -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host " [SentinelPC] Agente de Monitorizacao Windows em Execucao" -ForegroundColor Cyan
+Write-Host " Servidor Alvo: $ServerUrl" -ForegroundColor Cyan
+Write-Host " Computador:    $env:COMPUTERNAME" -ForegroundColor Cyan
+Write-Host " Frequencia:    Ciclo ativo de 3 segundos" -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
 
 while ($true) {
     try {
@@ -1609,7 +1632,13 @@ while ($true) {
             osVersion = if ($os) { $os.Caption } else { "Windows 11" }
         } | ConvertTo-Json -Compress -Depth 4
 
-        $res = Invoke-RestMethod -Uri "$ServerUrl/api/report" -Method Post -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec 8
+        $res = $null
+        try {
+            $res = Invoke-RestMethod -Uri "$ServerUrl/api/report" -Method Post -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec 8
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [✓ SUCESSO] Telemetria enviada para $ServerUrl ($detectedUser @ $env:COMPUTERNAME)" -ForegroundColor Green
+        } catch {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [✗ FALHA CONEXAO] Nao foi possivel contactar $ServerUrl/api/report: $($_.Exception.Message)" -ForegroundColor Red
+        }
 
         # 6. Executa Acoes Imediatas e Fila de Comandos recebidos do servidor
         if ($res.action) {
