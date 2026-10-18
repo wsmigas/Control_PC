@@ -1635,9 +1635,10 @@ while ($true) {
         $res = $null
         try {
             $res = Invoke-RestMethod -Uri "$ServerUrl/api/report" -Method Post -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec 8
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [✓ SUCESSO] Telemetria enviada para $ServerUrl ($detectedUser @ $env:COMPUTERNAME)" -ForegroundColor Green
+            $uName = if ($detectedUser) { $detectedUser } else { $env:USERNAME }
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [OK] Telemetria enviada para $ServerUrl ($uName em $env:COMPUTERNAME)" -ForegroundColor Green
         } catch {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [✗ FALHA CONEXAO] Nao foi possivel contactar $ServerUrl/api/report: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [ERRO] Nao foi possivel contactar $ServerUrl/api/report: $($_.Exception.Message)" -ForegroundColor Red
         }
 
         # 6. Executa Acoes Imediatas e Fila de Comandos recebidos do servidor
@@ -1869,8 +1870,8 @@ Write-Host "[4/4] A iniciar o agente imediatamente no ambiente de trabalho..."
 Start-Process powershell.exe -ArgumentList $scArgs
 
 Write-Host ""
-Write-Host "[✓] Agente instalado com sucesso e associado ao login do Windows!" -ForegroundColor Green
-Write-Host "[✓] O agente arranca automaticamente ao fazer login e monitoriza todas as aplicacoes." -ForegroundColor Green
+Write-Host "[OK] Agente instalado com sucesso e associado ao login do Windows!" -ForegroundColor Green
+Write-Host "[OK] O agente arranca automaticamente ao fazer login e monitoriza todas as aplicacoes." -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Cyan
 `;
 
@@ -1903,7 +1904,7 @@ try {
     }
 } catch {}
 Remove-Item -Path "$env:ProgramData\\SentinelPC" -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "[✓] SentinelPC desinstalado completamente do computador e regras de hosts limpas." -ForegroundColor Yellow
+Write-Host "[OK] SentinelPC desinstalado completamente do computador e regras de hosts limpas." -ForegroundColor Yellow
 `;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(script);
