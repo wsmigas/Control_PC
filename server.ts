@@ -1489,36 +1489,36 @@ function Update-WebFilterHosts($dominiosList) {
             $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
             $seen = @{}
 
-            foreach ($d in $cleanDoms) {
-                $rawDom = $d.Trim()
+            foreach ($domItem in $cleanDoms) {
+                $rawDom = $domItem.Trim()
                 if ($rawDom.Length -lt 3) { continue }
 
-                $variants = [System.Collections.Generic.List[string]]::new()
-                $variants.Add($rawDom)
+                $varList = [System.Collections.ArrayList]::new()
+                [void]$varList.Add($rawDom)
                 if (-not $rawDom.StartsWith("www.")) {
-                    $variants.Add("www.$rawDom")
+                    [void]$varList.Add("www.$rawDom")
                 } else {
-                    $variants.Add($rawDom.Substring(4))
+                    [void]$varList.Add($rawDom.Substring(4))
                 }
 
                 if ($rawDom -like "*youtube*") {
-                    $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com"))
+                    foreach ($ex in @("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) { [void]$varList.Add($ex) }
                 }
                 if ($rawDom -like "*tiktok*") {
-                    $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com"))
+                    foreach ($ex in @("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) { [void]$varList.Add($ex) }
                 }
                 if ($rawDom -like "*instagram*") {
-                    $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com"))
+                    foreach ($ex in @("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) { [void]$varList.Add($ex) }
                 }
                 if ($rawDom -like "*facebook*") {
-                    $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net"))
+                    foreach ($ex in @("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) { [void]$varList.Add($ex) }
                 }
                 if ($rawDom -like "*roblox*") {
-                    $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com"))
+                    foreach ($ex in @("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) { [void]$varList.Add($ex) }
                 }
 
-                foreach ($v in $variants) {
-                    $vLow = $v.ToLower()
+                foreach ($v in $varList) {
+                    $vLow = $v.ToString().ToLower()
                     if (-not $seen.ContainsKey($vLow)) {
                         $seen[$vLow] = $true
                         $lines.Add("0.0.0.0 $vLow")
@@ -1821,8 +1821,8 @@ Write-Host "================================================================" -F
 Write-Host " [SentinelPC] A instalar o Agente de Comunicacao HTTP no Windows... " -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
-$d = "$env:ProgramData\\SentinelPC"
-if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+$agentDir = "$env:ProgramData\\SentinelPC"
+if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
 
 $isAdmin = $false
 try {
@@ -1850,7 +1850,7 @@ try {
 # 1. Adiciona exclusao no Windows Defender para a pasta do agente e para o ficheiro hosts
 if ($isAdmin) {
     try {
-        Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath $agentDir -ErrorAction SilentlyContinue
         Add-MpPreference -ExclusionPath "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -ErrorAction SilentlyContinue
     } catch {}
 }
@@ -1896,20 +1896,20 @@ try {
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
     $seen = @{}
-    foreach ($d in $cleanDoms) {
-        $rawDom = $d.Trim()
+    foreach ($domItem in $cleanDoms) {
+        $rawDom = $domItem.Trim()
         if ($rawDom.Length -lt 3) { continue }
-        $variants = [System.Collections.Generic.List[string]]::new()
-        $variants.Add($rawDom)
-        if (-not $rawDom.StartsWith("www.")) { $variants.Add("www.$rawDom") } else { $variants.Add($rawDom.Substring(4)) }
-        if ($rawDom -like "*tiktok*") { $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) }
-        if ($rawDom -like "*youtube*") { $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) }
-        if ($rawDom -like "*instagram*") { $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) }
-        if ($rawDom -like "*facebook*") { $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) }
-        if ($rawDom -like "*roblox*") { $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) }
+        $varList = [System.Collections.ArrayList]::new()
+        [void]$varList.Add($rawDom)
+        if (-not $rawDom.StartsWith("www.")) { [void]$varList.Add("www.$rawDom") } else { [void]$varList.Add($rawDom.Substring(4)) }
+        if ($rawDom -like "*tiktok*") { foreach ($ex in @("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*youtube*") { foreach ($ex in @("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*instagram*") { foreach ($ex in @("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*facebook*") { foreach ($ex in @("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*roblox*") { foreach ($ex in @("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) { [void]$varList.Add($ex) } }
 
-        foreach ($v in $variants) {
-            $vLow = $v.ToLower()
+        foreach ($v in $varList) {
+            $vLow = $v.ToString().ToLower()
             if (-not $seen.ContainsKey($vLow)) {
                 $seen[$vLow] = $true
                 $lines.Add("0.0.0.0 $vLow")
@@ -1934,16 +1934,16 @@ try {
 }
 
 # 2. Descarrega script vigia.ps1 do servidor e cria lançador .bat
-$vigiaPath = "$d\\vigia.ps1"
+$vigiaPath = "$agentDir\\vigia.ps1"
 Write-Host "[2/5] A descarregar script vigia.ps1 de ${serverUrl}..."
 Invoke-WebRequest -Uri "${serverUrl}/api/agent/vigia.ps1" -OutFile $vigiaPath -UseBasicParsing
 
 try {
     $batContent = '@echo off' + [Environment]::NewLine + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vigia.ps1"'
-    [System.IO.File]::WriteAllText("$d\\vigia.bat", $batContent)
-    [System.IO.File]::WriteAllText("$d\\iniciar.bat", $batContent)
+    [System.IO.File]::WriteAllText("$agentDir\\vigia.bat", $batContent)
+    [System.IO.File]::WriteAllText("$agentDir\\iniciar.bat", $batContent)
     $cfgJson = '{"serverUrl":"' + "${serverUrl}" + '"}'
-    [System.IO.File]::WriteAllText("$d\\config.json", $cfgJson)
+    [System.IO.File]::WriteAllText("$agentDir\\config.json", $cfgJson)
 } catch {}
 
 # 3. Cria atalhos nativos (.lnk) nas pastas Startup do Windows (All Users & Current User)
