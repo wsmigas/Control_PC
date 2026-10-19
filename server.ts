@@ -1461,7 +1461,7 @@ function Update-WebFilterHosts($dominiosList) {
         $sig = ($cleanDoms -join ",")
         if ($global:lastAppliedDomsSig -eq $sig) { return }
 
-        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+        $hostsPath = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
         if (-not (Test-Path $hostsPath)) {
             try { New-Item -ItemType File -Path $hostsPath -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
         }
@@ -1480,7 +1480,7 @@ function Update-WebFilterHosts($dominiosList) {
         if ($null -eq $raw) { $raw = "" }
 
         # Remove bloco anterior do SentinelPC se existir
-        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\r?\n)?'
+        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?'
         $cleaned = [regex]::Replace($raw, $pattern, '')
 
         $newBlock = ""
@@ -1851,12 +1851,12 @@ try {
 if ($isAdmin) {
     try {
         Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue
-        Add-MpPreference -ExclusionPath "$env:SystemRoot\System32\drivers\etc\hosts" -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -ErrorAction SilentlyContinue
     } catch {}
 }
 
 # 1b. Configura permissoes de escrita no ficheiro hosts e desativa DNS-over-HTTPS (se administrador)
-$hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
+$hostsFile = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
 if (Test-Path $hostsFile) {
     try {
         attrib -r -a -s -h $hostsFile 2>$null
@@ -1868,12 +1868,12 @@ if (Test-Path $hostsFile) {
 if ($isAdmin) {
     try {
         # Desativa DNS-over-HTTPS no Chrome, Edge e Brave para que respeitem o ficheiro hosts local
-        New-Item -Path "HKLM:\SOFTWARE\Policies\Google\Chrome" -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Google\Chrome" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
-        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
-        New-Item -Path "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave" -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 } else {
     Write-Host "[DICA] Para aplicar o Filtro Web no hosts sem restricoes, execute o PowerShell como Administrador." -ForegroundColor Yellow
@@ -1891,7 +1891,7 @@ try {
 
     $rawHosts = Get-Content -Path $hostsFile -Raw -ErrorAction SilentlyContinue
     if ($null -eq $rawHosts) { $rawHosts = "" }
-    $cleanedHosts = [regex]::Replace($rawHosts, '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\r?\n)?', '')
+    $cleanedHosts = [regex]::Replace($rawHosts, '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
@@ -1934,16 +1934,16 @@ try {
 }
 
 # 2. Descarrega script vigia.ps1 do servidor e cria lançador .bat
-$vigiaPath = "$d\vigia.ps1"
+$vigiaPath = "$d\\vigia.ps1"
 Write-Host "[2/5] A descarregar script vigia.ps1 de ${serverUrl}..."
 Invoke-WebRequest -Uri "${serverUrl}/api/agent/vigia.ps1" -OutFile $vigiaPath -UseBasicParsing
 
 try {
     $batContent = '@echo off' + [Environment]::NewLine + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vigia.ps1"'
-    [System.IO.File]::WriteAllText("$d\vigia.bat", $batContent)
-    [System.IO.File]::WriteAllText("$d\iniciar.bat", $batContent)
+    [System.IO.File]::WriteAllText("$d\\vigia.bat", $batContent)
+    [System.IO.File]::WriteAllText("$d\\iniciar.bat", $batContent)
     $cfgJson = '{"serverUrl":"' + "${serverUrl}" + '"}'
-    [System.IO.File]::WriteAllText("$d\config.json", $cfgJson)
+    [System.IO.File]::WriteAllText("$d\\config.json", $cfgJson)
 } catch {}
 
 # 3. Cria atalhos nativos (.lnk) nas pastas Startup do Windows (All Users & Current User)
@@ -1954,9 +1954,9 @@ try {
 
     # Startup Comum (All Users - requer admin)
     if ($isAdmin) {
-        $startupAll = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+        $startupAll = "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
         if (Test-Path $startupAll) {
-            $scAll = $WshShell.CreateShortcut("$startupAll\SentinelPC.lnk")
+            $scAll = $WshShell.CreateShortcut("$startupAll\\SentinelPC.lnk")
             $scAll.TargetPath = "powershell.exe"
             $scAll.Arguments = $scArgs
             $scAll.WindowStyle = 7
@@ -1966,9 +1966,9 @@ try {
     }
 
     # Startup do Utilizador Atual
-    $userStartup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    $userStartup = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
     if (Test-Path $userStartup) {
-        $scUser = $WshShell.CreateShortcut("$userStartup\SentinelPC.lnk")
+        $scUser = $WshShell.CreateShortcut("$userStartup\\SentinelPC.lnk")
         $scUser.TargetPath = "powershell.exe"
         $scUser.Arguments = $scArgs
         $scUser.WindowStyle = 7
@@ -1982,14 +1982,14 @@ Write-Host "[4/5] A registar arranque no Registry do Windows (HKLM & HKCU Run)..
 try {
     $runCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $vigiaPath + '"'
     if ($isAdmin) {
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
     }
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
 # 5. Regista Tarefa Agendada no Windows ao iniciar sessao
 try {
-    $taskTr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $vigiaPath + '\"'
+    $taskTr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\"' + $vigiaPath + '\\"'
     if ($isAdmin) {
         schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /rl highest /f 2>$null | Out-Null
     } else {
