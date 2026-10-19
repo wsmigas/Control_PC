@@ -1289,6 +1289,8 @@ using System.Runtime.InteropServices;
 public class SentinelNativeW {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
   [StructLayout(LayoutKind.Sequential)] public struct LII { public uint cb; public uint t; }
   [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LII i);
   public static uint IdleMs() {
@@ -1300,6 +1302,15 @@ public class SentinelNativeW {
       }
       return 0;
     } catch { return 0; }
+  }
+  public static string GetActiveWindowTitle() {
+    try {
+      IntPtr h = GetForegroundWindow();
+      if (h == IntPtr.Zero) return "";
+      System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
+      GetWindowText(h, sb, 512);
+      return sb.ToString();
+    } catch { return ""; }
   }
 }
 "@ -ErrorAction SilentlyContinue
@@ -1317,7 +1328,8 @@ function Get-ActiveAppInfo {
                     $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
                     if ($proc) {
                         $pName = $proc.ProcessName
-                        $title = $proc.MainWindowTitle
+                        $nativeTitle = [SentinelNativeW]::GetActiveWindowTitle()
+                        $title = if ($nativeTitle -and $nativeTitle.Trim() -ne "") { $nativeTitle } else { $proc.MainWindowTitle }
 
                         # Tratar ApplicationFrameHost e Calculadora moderna do Windows
                         if ($pName -eq "ApplicationFrameHost") {
@@ -1449,16 +1461,18 @@ function Update-WebFilterHosts($dominiosList) {
         $sig = ($cleanDoms -join ",")
         if ($global:lastAppliedDomsSig -eq $sig) { return }
 
-        $hostsPath = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
+        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
         if (-not (Test-Path $hostsPath)) {
             try { New-Item -ItemType File -Path $hostsPath -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
         }
 
-        # Desmarca atributo ReadOnly se existir e garante permissões
+        # Desmarca atributos de Sistema, Oculto e ReadOnly se existirem e garante controlo total
         try {
-            $fItem = Get-Item $hostsPath -Force -ErrorAction SilentlyContinue
-            if ($fItem.IsReadOnly) { $fItem.IsReadOnly = $false }
-            icacls $hostsPath /grant "*S-1-5-32-545:(M)" /Q | Out-Null
+            attrib -r -a -s -h $hostsPath 2>$null
+            if (Test-Path $hostsPath) {
+                [System.IO.File]::SetAttributes($hostsPath, [System.IO.FileAttributes]::Normal)
+            }
+            icacls $hostsPath /grant "*S-1-5-32-545:(F)" "Users:(F)" "Everyone:(F)" /Q 2>$null | Out-Null
         } catch {}
 
         # Le conteudo atual do ficheiro hosts
@@ -1466,7 +1480,7 @@ function Update-WebFilterHosts($dominiosList) {
         if ($null -eq $raw) { $raw = "" }
 
         # Remove bloco anterior do SentinelPC se existir
-        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?'
+        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\r?\n)?'
         $cleaned = [regex]::Replace($raw, $pattern, '')
 
         $newBlock = ""
@@ -1488,19 +1502,19 @@ function Update-WebFilterHosts($dominiosList) {
                 }
 
                 if ($rawDom -like "*youtube*") {
-                    $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"))
+                    $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com"))
                 }
                 if ($rawDom -like "*tiktok*") {
-                    $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "byteoversea.com", "ibytedtos.com"))
+                    $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com"))
                 }
                 if ($rawDom -like "*instagram*") {
-                    $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com"))
+                    $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com"))
                 }
                 if ($rawDom -like "*facebook*") {
-                    $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com"))
+                    $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net"))
                 }
                 if ($rawDom -like "*roblox*") {
-                    $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com"))
+                    $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com"))
                 }
 
                 foreach ($v in $variants) {
@@ -1508,7 +1522,7 @@ function Update-WebFilterHosts($dominiosList) {
                     if (-not $seen.ContainsKey($vLow)) {
                         $seen[$vLow] = $true
                         $lines.Add("0.0.0.0 $vLow")
-                        $lines.Add("127.0.0.1 $vLow")
+                        $lines.Add("::1 $vLow")
                     }
                 }
             }
@@ -1519,15 +1533,21 @@ function Update-WebFilterHosts($dominiosList) {
 
         $nl = [Environment]::NewLine
         $merged = ($cleaned.TrimEnd() + $nl + $nl + $newBlock).Trim() + $nl
-        [System.IO.File]::WriteAllText($hostsPath, $merged, [System.Text.Encoding]::ASCII)
+        try {
+            [System.IO.File]::WriteAllText($hostsPath, $merged, [System.Text.Encoding]::ASCII)
+        } catch {
+            Set-Content -Path $hostsPath -Value $merged -Encoding ASCII -Force
+        }
 
         # Esvazia a cache de DNS do Windows imediatamente
         try { Clear-DnsClientCache -ErrorAction SilentlyContinue } catch {}
         try { ipconfig /flushdns | Out-Null } catch {}
 
         $global:lastAppliedDomsSig = $sig
-        Write-Host "[SentinelPC] Filtro Web: $($cleanDoms.Count) dominios injetados no ficheiro hosts com sucesso." -ForegroundColor Green
-    } catch {}
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [FILTRO WEB] $($cleanDoms.Count) dominios injetados no ficheiro hosts com sucesso." -ForegroundColor Green
+    } catch {
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [AVISO FILTRO WEB] Sem permissao para gravar no hosts: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 # Inicializar ou carregar contador local diario de tempo
@@ -1548,12 +1568,13 @@ if (Test-Path $dailyUsageFile) {
     } catch {}
 }
 
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [SentinelPC] Agente de Monitorizacao Windows em Execucao" -ForegroundColor Cyan
-Write-Host " Servidor Alvo: $ServerUrl" -ForegroundColor Cyan
-Write-Host " Computador:    $env:COMPUTERNAME" -ForegroundColor Cyan
-Write-Host " Frequencia:    Ciclo ativo de 3 segundos" -ForegroundColor Cyan
-Write-Host "================================================================" -ForegroundColor Cyan
+# Sincronizacao inicial imediata de dominios bloqueados no arranque do vigia
+try {
+    $initDoms = Invoke-RestMethod -Uri "$ServerUrl/api/dominios" -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction SilentlyContinue
+    if ($initDoms -and $initDoms.dominios) {
+        Update-WebFilterHosts $initDoms.dominios
+    }
+} catch {}
 
 while ($true) {
     try {
@@ -1687,7 +1708,30 @@ while ($true) {
                     }
                 }
 
-                # Deteta janelas de browsers abertos com o site bloqueado no titulo
+                # 1. Verifica de imediato a janela ativa em primeiro plano
+                $activeBlocked = $null
+                $lowActiveTitle = if ($activeTitle) { $activeTitle.ToLower() } else { "" }
+                if ($lowActiveTitle -ne "") {
+                    foreach ($kw in $domKeywords) {
+                        if ($lowActiveTitle -match [regex]::Escape($kw)) {
+                            $activeBlocked = $kw
+                            break
+                        }
+                    }
+                }
+
+                if ($activeBlocked) {
+                    try {
+                        $wsh = New-Object -ComObject WScript.Shell
+                        $wsh.SendKeys('^w')
+                        Start-Sleep -Milliseconds 80
+                        $wsh.SendKeys('^w')
+                    } catch {}
+                    Show-Alert "O site '$activeBlocked' esta bloqueado pelo Controlo Parental SentinelPC."
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [BLOQUEIO WEB] Separador '$activeBlocked' fechado na janela ativa." -ForegroundColor Yellow
+                }
+
+                # 2. Deteta janelas de browsers abertos com o site bloqueado no titulo
                 $browserRegex = '^(chrome|msedge|firefox|brave|opera|vivaldi)$'
                 $openBrowsers = Get-Process -ErrorAction SilentlyContinue | Where-Object { 
                     $_.ProcessName -match $browserRegex -and $_.MainWindowTitle 
@@ -1720,6 +1764,7 @@ while ($true) {
                         } catch {}
 
                         Show-Alert "O site '$matchedKw' foi bloqueado pelo Controlo Parental SentinelPC."
+                        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [BLOQUEIO WEB] Processo $($bProc.ProcessName) com site '$matchedKw' intercetado." -ForegroundColor Yellow
                     }
                 }
             }
@@ -1779,65 +1824,151 @@ Write-Host "================================================================" -F
 $d = "$env:ProgramData\\SentinelPC"
 if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 
+$isAdmin = $false
+try {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch {}
+
+if (-not $isAdmin) {
+    Write-Host "[SentinelPC] A solicitar permissao de Administrador para desbloquear o ficheiro hosts..." -ForegroundColor Cyan
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm ${serverUrl}/api/agent/install.ps1 | iex'
+        exit 0
+    } catch {
+        Write-Host "[AVISO] Nao foi possivel abrir como Administrador. A continuar com permissoes limitadas..." -ForegroundColor Yellow
+    }
+}
+
 # 0. Habilita politica de execucao de scripts no PowerShell
 try {
-    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction SilentlyContinue
+    if ($isAdmin) {
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction SilentlyContinue
+    }
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force -ErrorAction SilentlyContinue
 } catch {}
 
-# 1. Adiciona exclusao no Windows Defender para a pasta do agente
-try { Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue } catch {}
+# 1. Adiciona exclusao no Windows Defender para a pasta do agente e para o ficheiro hosts
+if ($isAdmin) {
+    try {
+        Add-MpPreference -ExclusionPath $d -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath "$env:SystemRoot\System32\drivers\etc\hosts" -ErrorAction SilentlyContinue
+    } catch {}
+}
 
-# 1b. Configura permissoes de escrita no ficheiro hosts e desativa DNS-over-HTTPS
+# 1b. Configura permissoes de escrita no ficheiro hosts e desativa DNS-over-HTTPS (se administrador)
+$hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
+if (Test-Path $hostsFile) {
+    try {
+        attrib -r -a -s -h $hostsFile 2>$null
+        [System.IO.File]::SetAttributes($hostsFile, [System.IO.FileAttributes]::Normal)
+        icacls $hostsFile /grant "*S-1-5-32-545:(F)" "Users:(F)" "Everyone:(F)" /Q 2>$null | Out-Null
+    } catch {}
+}
+
+if ($isAdmin) {
+    try {
+        # Desativa DNS-over-HTTPS no Chrome, Edge e Brave para que respeitem o ficheiro hosts local
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Google\Chrome" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Google\Chrome" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave" -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+} else {
+    Write-Host "[DICA] Para aplicar o Filtro Web no hosts sem restricoes, execute o PowerShell como Administrador." -ForegroundColor Yellow
+}
+
+# 1c. Injeção Imediata do Filtro Web no ficheiro hosts durante a instalação
+Write-Host "[1/5] A aplicar bloqueio de sites parental no ficheiro hosts..." -ForegroundColor Cyan
 try {
-    $hostsFile = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
-    if (Test-Path $hostsFile) {
-        $item = Get-Item $hostsFile -Force -ErrorAction SilentlyContinue
-        if ($item.IsReadOnly) { $item.IsReadOnly = $false }
-        icacls $hostsFile /grant "*S-1-5-32-545:(M)" /Q | Out-Null
-    }
+    $domsResp = $null
+    try {
+        $domsResp = Invoke-RestMethod -Uri "${serverUrl}/api/dominios" -Method Get -TimeoutSec 6 -UseBasicParsing -ErrorAction Stop
+    } catch {}
+    $targetDoms = if ($domsResp -and $domsResp.dominios) { $domsResp.dominios } else { @("tiktok.com", "instagram.com", "betclic.pt") }
+    $cleanDoms = @($targetDoms | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
 
-    # Desativa DNS-over-HTTPS no Chrome, Edge e Brave para que respeitem o ficheiro hosts local
-    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
-    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
-    New-Item -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave" -Name "DnsOverHttpsMode" -Value "off" -Force -ErrorAction SilentlyContinue | Out-Null
-} catch {}
+    $rawHosts = Get-Content -Path $hostsFile -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $rawHosts) { $rawHosts = "" }
+    $cleanedHosts = [regex]::Replace($rawHosts, '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\r?\n)?', '')
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
+    $seen = @{}
+    foreach ($d in $cleanDoms) {
+        $rawDom = $d.Trim()
+        if ($rawDom.Length -lt 3) { continue }
+        $variants = [System.Collections.Generic.List[string]]::new()
+        $variants.Add($rawDom)
+        if (-not $rawDom.StartsWith("www.")) { $variants.Add("www.$rawDom") } else { $variants.Add($rawDom.Substring(4)) }
+        if ($rawDom -like "*tiktok*") { $variants.AddRange(@("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) }
+        if ($rawDom -like "*youtube*") { $variants.AddRange(@("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) }
+        if ($rawDom -like "*instagram*") { $variants.AddRange(@("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) }
+        if ($rawDom -like "*facebook*") { $variants.AddRange(@("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) }
+        if ($rawDom -like "*roblox*") { $variants.AddRange(@("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) }
+
+        foreach ($v in $variants) {
+            $vLow = $v.ToLower()
+            if (-not $seen.ContainsKey($vLow)) {
+                $seen[$vLow] = $true
+                $lines.Add("0.0.0.0 $vLow")
+                $lines.Add("::1 $vLow")
+            }
+        }
+    }
+    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL FIM ---")
+    $nl = [Environment]::NewLine
+    $mergedHosts = ($cleanedHosts.TrimEnd() + $nl + $nl + [string]::Join($nl, $lines)).Trim() + $nl
+    try {
+        [System.IO.File]::WriteAllText($hostsFile, $mergedHosts, [System.Text.Encoding]::ASCII)
+    } catch {
+        Set-Content -Path $hostsFile -Value $mergedHosts -Encoding ASCII -Force
+    }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+    ipconfig /flushdns | Out-Null
+    Write-Host "[OK] $($cleanDoms.Count) dominios bloqueados no ficheiro hosts com sucesso!" -ForegroundColor Green
+    Write-Host "     -> $(($cleanDoms -join ', '))" -ForegroundColor Yellow
+} catch {
+    Write-Host "[AVISO] Nao foi possivel escrever no hosts: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 # 2. Descarrega script vigia.ps1 do servidor e cria lançador .bat
-$vigiaPath = "$d\\vigia.ps1"
-Write-Host "[1/4] A descarregar script vigia.ps1 de ${serverUrl}..."
+$vigiaPath = "$d\vigia.ps1"
+Write-Host "[2/5] A descarregar script vigia.ps1 de ${serverUrl}..."
 Invoke-WebRequest -Uri "${serverUrl}/api/agent/vigia.ps1" -OutFile $vigiaPath -UseBasicParsing
 
 try {
     $batContent = '@echo off' + [Environment]::NewLine + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vigia.ps1"'
-    [System.IO.File]::WriteAllText("$d\\vigia.bat", $batContent)
-    [System.IO.File]::WriteAllText("$d\\iniciar.bat", $batContent)
+    [System.IO.File]::WriteAllText("$d\vigia.bat", $batContent)
+    [System.IO.File]::WriteAllText("$d\iniciar.bat", $batContent)
+    $cfgJson = '{"serverUrl":"' + "${serverUrl}" + '"}'
+    [System.IO.File]::WriteAllText("$d\config.json", $cfgJson)
 } catch {}
 
 # 3. Cria atalhos nativos (.lnk) nas pastas Startup do Windows (All Users & Current User)
-Write-Host "[2/4] A configurar arranque automatico no login (Startup Shortcuts)..."
+Write-Host "[3/5] A configurar arranque automatico no login (Startup Shortcuts)..."
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $scArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $vigiaPath + '"'
 
-    # Startup Comum (All Users)
-    $startupAll = "$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
-    if (Test-Path $startupAll) {
-        $scAll = $WshShell.CreateShortcut("$startupAll\\SentinelPC.lnk")
-        $scAll.TargetPath = "powershell.exe"
-        $scAll.Arguments = $scArgs
-        $scAll.WindowStyle = 7
-        $scAll.Description = "SentinelPC Agente de Monitorizacao"
-        $scAll.Save()
+    # Startup Comum (All Users - requer admin)
+    if ($isAdmin) {
+        $startupAll = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+        if (Test-Path $startupAll) {
+            $scAll = $WshShell.CreateShortcut("$startupAll\SentinelPC.lnk")
+            $scAll.TargetPath = "powershell.exe"
+            $scAll.Arguments = $scArgs
+            $scAll.WindowStyle = 7
+            $scAll.Description = "SentinelPC Agente de Monitorizacao"
+            $scAll.Save()
+        }
     }
 
     # Startup do Utilizador Atual
-    $userStartup = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    $userStartup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     if (Test-Path $userStartup) {
-        $scUser = $WshShell.CreateShortcut("$userStartup\\SentinelPC.lnk")
+        $scUser = $WshShell.CreateShortcut("$userStartup\SentinelPC.lnk")
         $scUser.TargetPath = "powershell.exe"
         $scUser.Arguments = $scArgs
         $scUser.WindowStyle = 7
@@ -1847,17 +1978,23 @@ try {
 } catch {}
 
 # 4. Regista no Windows Registry Run (HKLM e HKCU para redundancia total)
-Write-Host "[3/4] A registar arranque no Registry do Windows (HKLM & HKCU Run)..."
+Write-Host "[4/5] A registar arranque no Registry do Windows (HKLM & HKCU Run)..."
 try {
     $runCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $vigiaPath + '"'
-    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+    if ($isAdmin) {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SentinelWatcher" -Value $runCmd -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-# 5. Regista Tarefa Agendada no Windows ao iniciar sessao (com privilegios elevados)
+# 5. Regista Tarefa Agendada no Windows ao iniciar sessao
 try {
     $taskTr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $vigiaPath + '\"'
-    schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /rl highest /f | Out-Null
+    if ($isAdmin) {
+        schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /rl highest /f 2>$null | Out-Null
+    } else {
+        schtasks /create /tn "SentinelWatcher" /tr $taskTr /sc onlogon /f 2>$null | Out-Null
+    }
 } catch {}
 
 # 6. Termina eventuais processos antigos ou bloqueados
@@ -1866,8 +2003,12 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # 7. Iniciar imediatamente no desktop atual
-Write-Host "[4/4] A iniciar o agente imediatamente no ambiente de trabalho..."
-Start-Process powershell.exe -ArgumentList $scArgs
+Write-Host "[5/5] A iniciar o agente imediatamente no ambiente de trabalho..."
+if ($isAdmin) {
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $scArgs
+} else {
+    Start-Process powershell.exe -ArgumentList $scArgs
+}
 
 Write-Host ""
 Write-Host "[OK] Agente instalado com sucesso e associado ao login do Windows!" -ForegroundColor Green
