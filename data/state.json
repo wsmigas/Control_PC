@@ -2,7 +2,7 @@
   "isRealData": true,
   "agent": {
     "targetUser": "admin",
-    "targetMachine": "TEST-PC",
+    "targetMachine": "PC-TESTES-WIN",
     "ipAddress": "192.168.1.145",
     "port": 5985,
     "connectionMethod": "agent_poll",
@@ -18,7 +18,17 @@
     "bonusMinutes": 0,
     "installationStatus": "installed",
     "optInstallPath": "/opt/control_pc",
-    "screenTimeMinutesToday": 0
+    "screenTimeMinutesToday": 0,
+    "hardware": {
+      "cpuPercent": 10,
+      "totalRamMb": 16384,
+      "freeRamMb": 8192,
+      "diskTotalGb": 500,
+      "diskFreeGb": 250,
+      "uptimeSeconds": 3600,
+      "tempMedia": null,
+      "lastUpdateTs": 1792483069155
+    }
   },
   "apps": [
     {
@@ -270,6 +280,13 @@
   ],
   "logs": [
     {
+      "id": "log-1792484636554",
+      "timestamp": "08:23:56",
+      "type": "info",
+      "message": "Mensagem enviada para o ecrã de admin: \"Vem jantar, a mesa está posta!\"",
+      "source": "painel"
+    },
+    {
       "id": "log-1792428766807",
       "timestamp": "16:52:46",
       "type": "alert",
@@ -353,7 +370,7 @@
       "target_user": "admin",
       "isOnline": true,
       "lastSeen": "Agora mesmo",
-      "lastSeenTs": 1792483069155,
+      "lastSeenTs": 1792484641215,
       "windowsUser": "admin"
     }
   },
@@ -373,10 +390,10 @@
       "diskFreeGb": 250,
       "uptimeSeconds": 3600,
       "tempMedia": null,
-      "lastUpdateTs": 1792483069155
+      "lastUpdateTs": 1792484641215
     }
   },
   "screenTimeTodaySeconds": {
-    "pc1": 3
+    "pc1": 6
   }
 }

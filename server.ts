@@ -752,9 +752,20 @@ app.post('/api/report', (req, res) => {
     };
   }
 
-  // Retrieve pending actions for this PC and dequeue them
-  const pending = currentState.pendingActions[pid] || [];
-  currentState.pendingActions[pid] = [];
+  // Retrieve pending actions for this PC and dequeue them (checking pid, activePc.id, and active target)
+  const pendingSet = new Set<string>();
+  const pending: any[] = [];
+  const candidateIds = Array.from(new Set([pid, activePc?.id, currentState.ativo, 'pc1'].filter(Boolean)));
+  for (const cid of candidateIds) {
+    const list = currentState.pendingActions[cid] || [];
+    for (const act of list) {
+      if (act && act.id && !pendingSet.has(act.id)) {
+        pendingSet.add(act.id);
+        pending.push(act);
+      }
+    }
+    currentState.pendingActions[cid] = [];
+  }
 
   // Add system log on first connect
   if (currentState.logs.length === 0 || currentState.logs[0].message.includes('A aguardar')) {
@@ -1009,15 +1020,19 @@ app.post('/api/msg', (req, res) => {
 
   const cleanText = text.trim().slice(0, 200);
 
-  if (!currentState.pendingActions[activePc.id]) {
-    currentState.pendingActions[activePc.id] = [];
-  }
+  const targetIds = Array.from(new Set([activePc.id, currentState.ativo, 'pc1'].filter(Boolean)));
+  const actId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
-  currentState.pendingActions[activePc.id].push({
-    id: `act_${Date.now()}`,
-    type: 'msg',
-    text: cleanText,
-    timestamp: Date.now(),
+  targetIds.forEach((tid: string) => {
+    if (!currentState.pendingActions[tid]) {
+      currentState.pendingActions[tid] = [];
+    }
+    currentState.pendingActions[tid].push({
+      id: actId,
+      type: 'msg',
+      text: cleanText,
+      timestamp: Date.now(),
+    });
   });
 
   currentState.logs.unshift({
@@ -1416,13 +1431,33 @@ function Get-RunningAppsList {
     return $apps
 }
 
-function Show-Alert($msg) {
+function Show-Alert($msg, $title = "SentinelPC - Mensagem dos Pais") {
+    if (-not $msg -or $msg.Trim() -eq "") { return }
     try {
-        # Dispara popup em processo separado nao-bloqueante para manter o ciclo de 3 segundos fluido
-        $safeMsg = $msg.Replace("'", "''")
-        $alertCmd = "(New-Object -ComObject WScript.Shell).Popup('$safeMsg', 15, 'SentinelPC Controlo Parental', 48)"
-        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', $alertCmd -ErrorAction SilentlyContinue
-    } catch {}
+        # 1. Toca sinal sonoro de notificacao no Windows
+        try { [System.Media.SystemSounds]::Exclamation.Play() } catch {}
+
+        $cleanMsg = $msg.Trim()
+        $vbsSafeMsg = $cleanMsg.Replace('"', '""')
+        $vbsSafeTitle = $title.Replace('"', '""')
+
+        # 2. Criar script VBScript com estilo TopMost (MB_SYSTEMMODAL = 4096 + MB_ICONINFORMATION = 64 -> 4160)
+        $vbsPath = "$env:Temp\\sentinel_msg.vbs"
+        $vbsCode = 'Set w = CreateObject("WScript.Shell")' + [Environment]::NewLine + 'w.Popup "' + $vbsSafeMsg + '", 45, "' + $vbsSafeTitle + '", 4160'
+        [System.IO.File]::WriteAllText($vbsPath, $vbsCode, [System.Text.Encoding]::Unicode)
+
+        # 3. Dispara atraves de wscript.exe (processo GUI nativo do Windows, sem consola e nao-bloqueante)
+        Start-Process "wscript.exe" -ArgumentList $vbsPath -ErrorAction SilentlyContinue
+
+        # 4. Canal redundante nativo msg.exe do Windows (para todas as sessoes ativas do desktop)
+        try {
+            Start-Process "msg.exe" -ArgumentList @('*', '/time:45', "SentinelPC: $cleanMsg") -WindowStyle Hidden -ErrorAction SilentlyContinue
+        } catch {}
+
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [MENSAGEM] Notificacao apresentada no ecra: $cleanMsg" -ForegroundColor Magenta
+    } catch {
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [ERRO MSG] Nao foi possivel exibir alerta: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
 $global:lastAppliedDomsSig = ""
@@ -1679,6 +1714,9 @@ while ($true) {
             if ($res.action.type -eq "lock_screen") {
                 rundll32.exe user32.dll,LockWorkStation
             }
+            if ($res.action.type -eq "msg" -and $res.action.text) {
+                Show-Alert $res.action.text "SentinelPC - Mensagem dos Pais"
+            }
         }
 
         # 6b. Execução imediata de bloqueio para processos nas regras recebidas
@@ -1787,7 +1825,7 @@ while ($true) {
                     }
                 }
                 if ($act.type -eq "msg" -and $act.text) {
-                    Show-Alert $act.text
+                    Show-Alert $act.text "SentinelPC - Mensagem dos Pais"
                 }
                 if ($act.type -eq "power") {
                     if ($act.action -eq "logoff") { logoff }
@@ -1798,6 +1836,23 @@ while ($true) {
             }
         }
 
+        # 7. Auto-atualizacao transparente do agente
+        $global:vigiaCycle = ($global:vigiaCycle + 1)
+        if ($global:vigiaCycle -ge 40) {
+            $global:vigiaCycle = 0
+            try {
+                $remCode = Invoke-RestMethod -Uri "$ServerUrl/api/agent/vigia.ps1" -Method Get -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
+                $currPath = if ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { "$env:ProgramData\\SentinelPC\\vigia.ps1" }
+                if ($remCode -and $remCode.Length -gt 1000 -and (Test-Path $currPath)) {
+                    $currCode = Get-Content $currPath -Raw -ErrorAction SilentlyContinue
+                    if ($remCode.Trim() -ne $currCode.Trim()) {
+                        [System.IO.File]::WriteAllText($currPath, $remCode, [System.Text.Encoding]::UTF8)
+                        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $currPath)
+                        exit 0
+                    }
+                }
+            } catch {}
+        }
     } catch {
         # Resiliente: se o servidor estiver temporariamente indisponivel, continua em loop
     }
