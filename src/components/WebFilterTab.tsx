@@ -330,9 +330,38 @@ export const WebFilterTab: React.FC<WebFilterTabProps> = ({
             {hostsBlock}
           </pre>
 
+          <div className="rounded-lg bg-cyan-950/30 p-3 border border-cyan-800/40 text-[11px] text-cyan-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-cyan-300 flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-cyan-400" />
+                Sincronização Automática em Tempo Real:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000';
+                  navigator.clipboard.writeText(`irm ${origin}/api/agent/limpar-hosts.ps1 | iex`);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+                className="text-[10px] px-2 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-300 border border-cyan-700/50 cursor-pointer flex items-center gap-1"
+                title="Copiar comando para sincronizar imediatamente no Windows"
+              >
+                <Copy className="h-2.5 w-2.5" />
+                <span>Copiar Comando PowerShell</span>
+              </button>
+            </div>
+            <p className="text-slate-400 leading-relaxed">
+              O agente <code>vigia.ps1</code> sincroniza e limpa automaticamente o ficheiro hosts a cada 3 segundos. Se acabou de apagar um site e quer purgar a cache do Windows de imediato no PowerShell Alvo:
+            </p>
+            <div className="p-2 rounded bg-black/60 font-mono text-[11px] text-amber-300 border border-slate-800 break-all select-all">
+              irm {typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'}/api/agent/limpar-hosts.ps1 | iex
+            </div>
+          </div>
+
           <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-800 text-[11px] text-slate-400 space-y-1">
             <span className="font-semibold text-slate-300 block">Como funciona o bloqueio:</span>
-            O redirecionamento para 0.0.0.0 funciona em todos os browsers (Chrome, Edge, Firefox) e aplicações desktop. Mesmo que o filho mude o DNS ou navegue em modo incógnito, o bloqueio mantém-se inviolável.
+            O redirecionamento para 0.0.0.0 funciona em todos os browsers (Chrome, Edge, Firefox) e aplicações desktop. Quando remove um site dos filtros, o agente retira a regra do ficheiro hosts e executa <code>ipconfig /flushdns</code> para restaurar o acesso de imediato.
           </div>
         </div>
       </div>

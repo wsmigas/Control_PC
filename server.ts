@@ -1283,37 +1283,8 @@ foreach ($o in $others) {
 # 2. Inicializacao segura da API nativa Win32 (GetForegroundWindow + GetLastInputInfo)
 if (-not ([System.Management.Automation.PSTypeName]'SentinelNativeW').Type) {
     try {
-        Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class SentinelNativeW {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
-  [StructLayout(LayoutKind.Sequential)] public struct LII { public uint cb; public uint t; }
-  [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LII i);
-  public static uint IdleMs() {
-    try {
-      LII i = new LII();
-      i.cb = (uint)Marshal.SizeOf(i);
-      if (GetLastInputInfo(ref i)) {
-        return (uint)Environment.TickCount - i.t;
-      }
-      return 0;
-    } catch { return 0; }
-  }
-  public static string GetActiveWindowTitle() {
-    try {
-      IntPtr h = GetForegroundWindow();
-      if (h == IntPtr.Zero) return "";
-      System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
-      GetWindowText(h, sb, 512);
-      return sb.ToString();
-    } catch { return ""; }
-  }
-}
-"@ -ErrorAction SilentlyContinue
+        $cCode = 'using System; using System.Runtime.InteropServices; public class SentinelNativeW { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); [StructLayout(LayoutKind.Sequential)] public struct LII { public uint cb; public uint t; } [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LII i); public static uint IdleMs() { try { LII i = new LII(); i.cb = (uint)Marshal.SizeOf(i); if (GetLastInputInfo(ref i)) { return (uint)Environment.TickCount - i.t; } return 0; } catch { return 0; } } public static string GetActiveWindowTitle() { try { IntPtr h = GetForegroundWindow(); if (h == IntPtr.Zero) return ""; System.Text.StringBuilder sb = new System.Text.StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); } catch { return ""; } } }'
+        Add-Type -TypeDefinition $cCode -ErrorAction SilentlyContinue
     } catch {}
 }
 
@@ -1457,7 +1428,10 @@ function Show-Alert($msg) {
 $global:lastAppliedDomsSig = ""
 function Update-WebFilterHosts($dominiosList) {
     try {
-        $cleanDoms = @($dominiosList | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
+        $cleanDoms = @()
+        if ($null -ne $dominiosList) {
+            $cleanDoms = @($dominiosList | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
+        }
         $sig = ($cleanDoms -join ",")
         if ($global:lastAppliedDomsSig -eq $sig) { return }
 
@@ -1475,14 +1449,39 @@ function Update-WebFilterHosts($dominiosList) {
             icacls $hostsPath /grant "*S-1-5-32-545:(F)" "Users:(F)" "Everyone:(F)" /Q 2>$null | Out-Null
         } catch {}
 
-        # Le conteudo atual do ficheiro hosts
+        # 1. Le conteudo atual do ficheiro hosts
         $raw = Get-Content -Path $hostsPath -Raw -ErrorAction SilentlyContinue
         if ($null -eq $raw) { $raw = "" }
 
-        # Remove bloco anterior do SentinelPC se existir
-        $pattern = '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?'
-        $cleaned = [regex]::Replace($raw, $pattern, '')
+        # 2. Remove bloco anterior do SentinelPC se existir
+        $cleaned = [regex]::Replace($raw, '(?is)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
 
+        # 3. Limpeza linha-a-linha de seguranca: remove qualquer linha residual de dominios nao autorizados
+        $linesArr = $cleaned -split '\\r?\\n'
+        $keptLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $linesArr) {
+            $t = $line.Trim()
+            if ($t -like "*SENTINELPC*" -or $t -like "*SentinelPC*") { continue }
+            if ($t -match '^(0\\.0\\.0\\.0|::1|127\\.0\\.0\\.1)\\s+([a-zA-Z0-9\\.\\-_]+)') {
+                $mappedHost = $matches[2].ToLower()
+                if ($mappedHost -ne "localhost" -and $mappedHost -ne "broadcasthost" -and $mappedHost -ne "local") {
+                    $isAllowedNow = $false
+                    foreach ($cd in $cleanDoms) {
+                        if ($mappedHost -eq $cd -or $mappedHost -like "*.$cd") {
+                            $isAllowedNow = $true
+                            break
+                        }
+                    }
+                    if (-not $isAllowedNow) {
+                        continue
+                    }
+                }
+            }
+            $keptLines.Add($line)
+        }
+        $baseContent = ($keptLines -join [Environment]::NewLine).Trim()
+
+        # 4. Gera novo bloco se existirem dominios para bloquear
         $newBlock = ""
         if ($cleanDoms.Count -gt 0) {
             $lines = [System.Collections.Generic.List[string]]::new()
@@ -1532,7 +1531,12 @@ function Update-WebFilterHosts($dominiosList) {
         }
 
         $nl = [Environment]::NewLine
-        $merged = ($cleaned.TrimEnd() + $nl + $nl + $newBlock).Trim() + $nl
+        $merged = if ($newBlock -ne "") {
+            ($baseContent + $nl + $nl + $newBlock).Trim() + $nl
+        } else {
+            $baseContent + $nl
+        }
+
         try {
             [System.IO.File]::WriteAllText($hostsPath, $merged, [System.Text.Encoding]::ASCII)
         } catch {
@@ -1544,7 +1548,7 @@ function Update-WebFilterHosts($dominiosList) {
         try { ipconfig /flushdns | Out-Null } catch {}
 
         $global:lastAppliedDomsSig = $sig
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [FILTRO WEB] $($cleanDoms.Count) dominios injetados no ficheiro hosts com sucesso." -ForegroundColor Green
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [FILTRO WEB] Sincronizado: $($cleanDoms.Count) dominios ativos no ficheiro hosts." -ForegroundColor Green
     } catch {
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] [AVISO FILTRO WEB] Sem permissao para gravar no hosts: $($_.Exception.Message)" -ForegroundColor Yellow
     }
@@ -1571,7 +1575,7 @@ if (Test-Path $dailyUsageFile) {
 # Sincronizacao inicial imediata de dominios bloqueados no arranque do vigia
 try {
     $initDoms = Invoke-RestMethod -Uri "$ServerUrl/api/dominios" -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction SilentlyContinue
-    if ($initDoms -and $initDoms.dominios) {
+    if ($initDoms -and $null -ne $initDoms.dominios) {
         Update-WebFilterHosts $initDoms.dominios
     }
 } catch {}
@@ -1692,7 +1696,7 @@ while ($true) {
         }
 
         # 6c. Execucao e Intercecao Ativa do Filtro Web no Windows
-        if ($res.dominios) {
+        if ($null -ne $res -and $null -ne $res.dominios) {
             Update-WebFilterHosts $res.dominios
 
             if ($res.dominios.Count -gt 0) {
@@ -1886,40 +1890,75 @@ try {
     try {
         $domsResp = Invoke-RestMethod -Uri "${serverUrl}/api/dominios" -Method Get -TimeoutSec 6 -UseBasicParsing -ErrorAction Stop
     } catch {}
-    $targetDoms = if ($domsResp -and $domsResp.dominios) { $domsResp.dominios } else { @("tiktok.com", "instagram.com", "betclic.pt") }
+    $targetDoms = if ($domsResp -and $null -ne $domsResp.dominios) { $domsResp.dominios } else { @("tiktok.com", "instagram.com", "betclic.pt") }
     $cleanDoms = @($targetDoms | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
 
     $rawHosts = Get-Content -Path $hostsFile -Raw -ErrorAction SilentlyContinue
     if ($null -eq $rawHosts) { $rawHosts = "" }
-    $cleanedHosts = [regex]::Replace($rawHosts, '(?s)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
+    $cleanedHosts = [regex]::Replace($rawHosts, '(?is)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
 
-    $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
-    $seen = @{}
-    foreach ($domItem in $cleanDoms) {
-        $rawDom = $domItem.Trim()
-        if ($rawDom.Length -lt 3) { continue }
-        $varList = [System.Collections.ArrayList]::new()
-        [void]$varList.Add($rawDom)
-        if (-not $rawDom.StartsWith("www.")) { [void]$varList.Add("www.$rawDom") } else { [void]$varList.Add($rawDom.Substring(4)) }
-        if ($rawDom -like "*tiktok*") { foreach ($ex in @("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) { [void]$varList.Add($ex) } }
-        if ($rawDom -like "*youtube*") { foreach ($ex in @("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) { [void]$varList.Add($ex) } }
-        if ($rawDom -like "*instagram*") { foreach ($ex in @("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) { [void]$varList.Add($ex) } }
-        if ($rawDom -like "*facebook*") { foreach ($ex in @("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) { [void]$varList.Add($ex) } }
-        if ($rawDom -like "*roblox*") { foreach ($ex in @("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) { [void]$varList.Add($ex) } }
-
-        foreach ($v in $varList) {
-            $vLow = $v.ToString().ToLower()
-            if (-not $seen.ContainsKey($vLow)) {
-                $seen[$vLow] = $true
-                $lines.Add("0.0.0.0 $vLow")
-                $lines.Add("::1 $vLow")
+    # Limpeza linha-a-linha de seguranca
+    $linesArr = $cleanedHosts -split '\\r?\\n'
+    $keptLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $linesArr) {
+        $t = $line.Trim()
+        if ($t -like "*SENTINELPC*" -or $t -like "*SentinelPC*") { continue }
+        if ($t -match '^(0\\.0\\.0\\.0|::1|127\\.0\\.0\\.1)\\s+([a-zA-Z0-9\\.\\-_]+)') {
+            $mappedHost = $matches[2].ToLower()
+            if ($mappedHost -ne "localhost" -and $mappedHost -ne "broadcasthost" -and $mappedHost -ne "local") {
+                $isAllowedNow = $false
+                foreach ($cd in $cleanDoms) {
+                    if ($mappedHost -eq $cd -or $mappedHost -like "*.$cd") {
+                        $isAllowedNow = $true
+                        break
+                    }
+                }
+                if (-not $isAllowedNow) {
+                    continue
+                }
             }
         }
+        $keptLines.Add($line)
     }
-    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL FIM ---")
+    $baseContent = ($keptLines -join [Environment]::NewLine).Trim()
+
+    $newBlock = ""
+    if ($cleanDoms.Count -gt 0) {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
+        $seen = @{}
+        foreach ($domItem in $cleanDoms) {
+            $rawDom = $domItem.Trim()
+            if ($rawDom.Length -lt 3) { continue }
+            $varList = [System.Collections.ArrayList]::new()
+            [void]$varList.Add($rawDom)
+            if (-not $rawDom.StartsWith("www.")) { [void]$varList.Add("www.$rawDom") } else { [void]$varList.Add($rawDom.Substring(4)) }
+            if ($rawDom -like "*tiktok*") { foreach ($ex in @("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) { [void]$varList.Add($ex) } }
+            if ($rawDom -like "*youtube*") { foreach ($ex in @("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) { [void]$varList.Add($ex) } }
+            if ($rawDom -like "*instagram*") { foreach ($ex in @("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) { [void]$varList.Add($ex) } }
+            if ($rawDom -like "*facebook*") { foreach ($ex in @("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) { [void]$varList.Add($ex) } }
+            if ($rawDom -like "*roblox*") { foreach ($ex in @("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) { [void]$varList.Add($ex) } }
+
+            foreach ($v in $varList) {
+                $vLow = $v.ToString().ToLower()
+                if (-not $seen.ContainsKey($vLow)) {
+                    $seen[$vLow] = $true
+                    $lines.Add("0.0.0.0 $vLow")
+                    $lines.Add("::1 $vLow")
+                }
+            }
+        }
+        $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL FIM ---")
+        $newBlock = [string]::Join([Environment]::NewLine, $lines)
+    }
+
     $nl = [Environment]::NewLine
-    $mergedHosts = ($cleanedHosts.TrimEnd() + $nl + $nl + [string]::Join($nl, $lines)).Trim() + $nl
+    $mergedHosts = if ($newBlock -ne "") {
+        ($baseContent + $nl + $nl + $newBlock).Trim() + $nl
+    } else {
+        $baseContent + $nl
+    }
+
     try {
         [System.IO.File]::WriteAllText($hostsFile, $mergedHosts, [System.Text.Encoding]::ASCII)
     } catch {
@@ -1927,8 +1966,10 @@ try {
     }
     Clear-DnsClientCache -ErrorAction SilentlyContinue
     ipconfig /flushdns | Out-Null
-    Write-Host "[OK] $($cleanDoms.Count) dominios bloqueados no ficheiro hosts com sucesso!" -ForegroundColor Green
-    Write-Host "     -> $(($cleanDoms -join ', '))" -ForegroundColor Yellow
+    Write-Host "[OK] $($cleanDoms.Count) dominios sincronizados no ficheiro hosts com sucesso!" -ForegroundColor Green
+    if ($cleanDoms.Count -gt 0) {
+        Write-Host "     -> $(($cleanDoms -join ', '))" -ForegroundColor Yellow
+    }
 } catch {
     Write-Host "[AVISO] Nao foi possivel escrever no hosts: $($_.Exception.Message)" -ForegroundColor Yellow
 }
@@ -2004,11 +2045,9 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
 
 # 7. Iniciar imediatamente no desktop atual
 Write-Host "[5/5] A iniciar o agente imediatamente no ambiente de trabalho..."
-if ($isAdmin) {
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $scArgs
-} else {
-    Start-Process powershell.exe -ArgumentList $scArgs
-}
+try {
+    Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $vigiaPath) -ErrorAction SilentlyContinue
+} catch {}
 
 Write-Host ""
 Write-Host "[OK] Agente instalado com sucesso e associado ao login do Windows!" -ForegroundColor Green
@@ -2050,6 +2089,139 @@ Write-Host "[OK] SentinelPC desinstalado completamente do computador e regras de
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(script);
 });
+
+// 17b. Script de Sincronização / Limpeza Imediata do Ficheiro Hosts (limpar-hosts.ps1)
+app.get('/api/agent/limpar-hosts.ps1', (req, res) => {
+  const host = req.headers['x-forwarded-host'] || req.get('host') || '127.0.0.1:3000';
+  const rawProto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+  const protocol = rawProto.split(',')[0].trim();
+  const serverUrl = `${protocol}://${host}`;
+
+  const script = `# ================================================================
+# SentinelPC - Sincronizacao Imediata do Filtro Web no Windows
+# ================================================================
+Write-Host "[SentinelPC] A sincronizar regras de bloqueio web no Windows..." -ForegroundColor Cyan
+
+$isAdmin = $false
+try {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch {}
+
+if (-not $isAdmin) {
+    Write-Host "[SentinelPC] A solicitar elevacao de Administrador para atualizar o ficheiro hosts..." -ForegroundColor Yellow
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm ${serverUrl}/api/agent/limpar-hosts.ps1 | iex"
+        exit 0
+    } catch {
+        Write-Host "[ERRO] Permissao de Administrador negada. Nao e possivel alterar o ficheiro hosts." -ForegroundColor Red
+        exit 1
+    }
+}
+
+$hostsPath = "$env:SystemRoot\\System32\\drivers\\etc\\hosts"
+try {
+    attrib -r -a -s -h $hostsPath 2>$null
+    if (Test-Path $hostsPath) {
+        [System.IO.File]::SetAttributes($hostsPath, [System.IO.FileAttributes]::Normal)
+    }
+    icacls $hostsPath /grant "*S-1-5-32-545:(F)" "Users:(F)" "Everyone:(F)" /Q 2>$null | Out-Null
+} catch {}
+
+# Obter dominios ativos atuais do servidor
+$cleanDoms = @()
+try {
+    $resp = Invoke-RestMethod -Uri "${serverUrl}/api/dominios" -Method Get -TimeoutSec 6 -UseBasicParsing -ErrorAction SilentlyContinue
+    if ($resp -and $null -ne $resp.dominios) {
+        $cleanDoms = @($resp.dominios | Where-Object { $_ -and $_.Trim() -ne "" } | ForEach-Object { $_.Trim().ToLower().Replace('*.','') } | Sort-Object -Unique)
+    }
+} catch {}
+
+$raw = Get-Content -Path $hostsPath -Raw -ErrorAction SilentlyContinue
+if ($null -eq $raw) { $raw = "" }
+$cleaned = [regex]::Replace($raw, '(?is)# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---.*?# --- SENTINELPC BLOQUEIO PARENTAL FIM ---(\\r?\\n)?', '')
+
+$linesArr = $cleaned -split '\\r?\\n'
+$keptLines = [System.Collections.Generic.List[string]]::new()
+foreach ($line in $linesArr) {
+    $t = $line.Trim()
+    if ($t -like "*SENTINELPC*" -or $t -like "*SentinelPC*") { continue }
+    if ($t -match '^(0\\.0\\.0\\.0|::1|127\\.0\\.0\\.1)\\s+([a-zA-Z0-9\\.\\-_]+)') {
+        $mappedHost = $matches[2].ToLower()
+        if ($mappedHost -ne "localhost" -and $mappedHost -ne "broadcasthost" -and $mappedHost -ne "local") {
+            $isAllowedNow = $false
+            foreach ($cd in $cleanDoms) {
+                if ($mappedHost -eq $cd -or $mappedHost -like "*.$cd") {
+                    $isAllowedNow = $true
+                    break
+                }
+            }
+            if (-not $isAllowedNow) {
+                continue
+            }
+        }
+    }
+    $keptLines.Add($line)
+}
+$baseContent = ($keptLines -join [Environment]::NewLine).Trim()
+
+$newBlock = ""
+if ($cleanDoms.Count -gt 0) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL INICIO ---")
+    $seen = @{}
+    foreach ($domItem in $cleanDoms) {
+        $rawDom = $domItem.Trim()
+        if ($rawDom.Length -lt 3) { continue }
+        $varList = [System.Collections.ArrayList]::new()
+        [void]$varList.Add($rawDom)
+        if (-not $rawDom.StartsWith("www.")) { [void]$varList.Add("www.$rawDom") } else { [void]$varList.Add($rawDom.Substring(4)) }
+        if ($rawDom -like "*tiktok*") { foreach ($ex in @("m.tiktok.com", "t.tiktok.com", "v16.tiktokcdn.com", "v19.tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "musical.ly", "ibyteimg.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*youtube*") { foreach ($ex in @("m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtubei.googleapis.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "i.ytimg.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*instagram*") { foreach ($ex in @("m.instagram.com", "l.instagram.com", "graph.instagram.com", "cdninstagram.com")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*facebook*") { foreach ($ex in @("m.facebook.com", "l.facebook.com", "web.facebook.com", "fb.com", "fbcdn.net")) { [void]$varList.Add($ex) } }
+        if ($rawDom -like "*roblox*") { foreach ($ex in @("web.roblox.com", "api.roblox.com", "setup.rbxcdn.com", "rbxcdn.com")) { [void]$varList.Add($ex) } }
+
+        foreach ($v in $varList) {
+            $vLow = $v.ToString().ToLower()
+            if (-not $seen.ContainsKey($vLow)) {
+                $seen[$vLow] = $true
+                $lines.Add("0.0.0.0 $vLow")
+                $lines.Add("::1 $vLow")
+            }
+        }
+    }
+    $lines.Add("# --- SENTINELPC BLOQUEIO PARENTAL FIM ---")
+    $newBlock = [string]::Join([Environment]::NewLine, $lines)
+}
+
+$nl = [Environment]::NewLine
+$merged = if ($newBlock -ne "") {
+    ($baseContent + $nl + $nl + $newBlock).Trim() + $nl
+} else {
+    $baseContent + $nl
+}
+
+try {
+    [System.IO.File]::WriteAllText($hostsPath, $merged, [System.Text.Encoding]::ASCII)
+} catch {
+    Set-Content -Path $hostsPath -Value $merged -Encoding ASCII -Force
+}
+Clear-DnsClientCache -ErrorAction SilentlyContinue
+ipconfig /flushdns | Out-Null
+
+Write-Host "[OK] Ficheiro hosts limpo e atualizado com sucesso!" -ForegroundColor Green
+Write-Host "     Dominios bloqueados agora: $($cleanDoms.Count)" -ForegroundColor Green
+if ($cleanDoms.Count -gt 0) {
+    Write-Host "     -> $(($cleanDoms -join ', '))" -ForegroundColor Yellow
+} else {
+    Write-Host "     (Todos os dominios foram desbloqueados)" -ForegroundColor Cyan
+}
+`;
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(script);
+});
+
 
 // 18. Ping real com validação ICMP / TCP
 app.post('/api/ping', async (req, res) => {

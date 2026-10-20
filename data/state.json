@@ -1,8 +1,8 @@
 {
   "isRealData": true,
   "agent": {
-    "targetUser": "tomas_teste",
-    "targetMachine": "PC-TESTES-WIN",
+    "targetUser": "admin",
+    "targetMachine": "TEST-PC",
     "ipAddress": "192.168.1.145",
     "port": 5985,
     "connectionMethod": "agent_poll",
@@ -10,14 +10,15 @@
     "osVersion": "Windows 11",
     "version": "2.4.2-blobs",
     "processesCount": 0,
-    "taskStatus": "Offline (Desconectado / À espera do agente)",
+    "taskStatus": "Online (Ambiente de Trabalho)",
     "sha256Hash": "9a7e3b18c6e245a498263158f9104b901a82e75306e00b65cf5480e6113b2c1f",
     "hashVerified": true,
-    "lastSyncTime": "Nunca",
+    "lastSyncTime": "Agora mesmo",
     "emergencyLock": false,
     "bonusMinutes": 0,
     "installationStatus": "installed",
-    "optInstallPath": "/opt/control_pc"
+    "optInstallPath": "/opt/control_pc",
+    "screenTimeMinutesToday": 0
   },
   "apps": [
     {
@@ -245,7 +246,8 @@
       "category": "Redes Sociais",
       "active": true,
       "hitsToday": 0,
-      "addedDate": "2026-10-13"
+      "addedDate": "2026-10-19",
+      "isWildcard": false
     },
     {
       "id": "dom-2",
@@ -253,7 +255,8 @@
       "category": "Redes Sociais",
       "active": true,
       "hitsToday": 0,
-      "addedDate": "2026-10-13"
+      "addedDate": "2026-10-19",
+      "isWildcard": false
     },
     {
       "id": "dom-3",
@@ -261,10 +264,25 @@
       "category": "Apostas",
       "active": true,
       "hitsToday": 0,
-      "addedDate": "2026-10-13"
+      "addedDate": "2026-10-19",
+      "isWildcard": false
     }
   ],
   "logs": [
+    {
+      "id": "log-1792428766807",
+      "timestamp": "16:52:46",
+      "type": "alert",
+      "message": "Filtro Web atualizado: 3 domínio(s) ativo(s) para bloqueio no Windows.",
+      "source": "dashboard"
+    },
+    {
+      "id": "log-1792428750062",
+      "timestamp": "16:52:30",
+      "type": "alert",
+      "message": "Filtro Web atualizado: 1 domínio(s) ativo(s) para bloqueio no Windows.",
+      "source": "dashboard"
+    },
     {
       "id": "log-1792140141357",
       "timestamp": "08:42:21",
@@ -325,32 +343,40 @@
   "pcs": {
     "pc1": {
       "id": "pc1",
-      "nome": "PC-TESTES-WIN",
+      "nome": "TEST-PC",
       "host": "192.168.1.145",
       "port": 5985,
       "connectionMethod": "agent_poll",
       "ssh_user": "admin",
       "ssh_password": "",
       "ssh_key": "",
-      "target_user": "tomas_teste",
-      "isOnline": false,
-      "lastSeen": "Nunca",
-      "lastSeenTs": 1792059593025
+      "target_user": "admin",
+      "isOnline": true,
+      "lastSeen": "Agora mesmo",
+      "lastSeenTs": 1792483069155,
+      "windowsUser": "admin"
     }
   },
   "ativo": "pc1",
   "pendingActions": {
-    "pc1": [
-      {
-        "id": "act-1792140141357-0.4560776004555951",
-        "type": "killall",
-        "name": "CalculatorApp.exe",
-        "timestamp": 1792140141357
-      }
-    ]
+    "pc1": []
   },
   "runningProcesses": {
     "pc1": []
   },
-  "hardware": {}
+  "hardware": {
+    "pc1": {
+      "cpuPercent": 10,
+      "totalRamMb": 16384,
+      "freeRamMb": 8192,
+      "diskTotalGb": 500,
+      "diskFreeGb": 250,
+      "uptimeSeconds": 3600,
+      "tempMedia": null,
+      "lastUpdateTs": 1792483069155
+    }
+  },
+  "screenTimeTodaySeconds": {
+    "pc1": 3
+  }
 }

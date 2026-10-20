@@ -208,6 +208,9 @@ export function generateRegrasJson(apps: AppUsageRecord[], curfew: CurfewDaySche
 // Generates the hosts file block matching the patch
 export function generateHostsBlock(blockedDomains: BlockedDomain[]): string {
   const active = blockedDomains.filter((d) => d.active);
+  if (active.length === 0) {
+    return '# Ficheiro hosts limpo (nenhum site bloqueado atualmente)';
+  }
   const entries: string[] = [];
   const seen = new Set<string>();
 
